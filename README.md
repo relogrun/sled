@@ -133,6 +133,16 @@ SLED_RECENT_K=4 cargo run -p sled-cli -- run ./dialog
 
 The file index is always included. The `--k` option only limits message bodies. With `--k` set, the model can still reach evicted bodies through the `open` tool, so limiting context loses nothing.
 
+## Tools
+
+Tool files are executed sequentially by the runner: one `tool.pending` file at a time, in slot order. A single tool may still batch work internally — the protocol prompt instructs the model to put one batched request (several paths, several URLs) into one tool call whenever the next step does not depend on each intermediate result, so a sequential protocol does not mean one file per item. Each tool request and its result live in the same `tool.pending` file, which is renamed to `done` after execution.
+
+Built-in tools:
+
+- `open`: open older message bodies by slot number.
+- `read`: read local filesystem files.
+- `http_get`: fetch HTTP/HTTPS URLs with timeout and response-size limits.
+
 ## Body Mirrors
 
 Message bodies always stay inline in JSON5 as the source of truth. Set `SLED_BODY_MIRROR=true` or pass `--body-mirror` to also write readable markdown mirrors:
@@ -144,16 +154,6 @@ cargo run -p sled-cli -- say ./dialog "hello" --body-mirror
 Mirror names use the final message shape, for example `0002.assistant.done.md`. The runner ignores `.md` mirrors when building context.
 
 Mirrors are write-time projections: if you edit a JSON5 body by hand, its mirror goes stale until the file is written again. Treat mirrors as a view, never as a place to edit.
-
-## Tools
-
-Tool files are executed sequentially by the runner: one `tool.pending` file at a time, in slot order. A single tool may still batch work internally — the protocol prompt instructs the model to put one batched request (several paths, several URLs) into one tool call whenever the next step does not depend on each intermediate result, so a sequential protocol does not mean one file per item. Each tool request and its result live in the same `tool.pending` file, which is renamed to `done` after execution.
-
-Built-in tools:
-
-- `open`: open older message bodies by slot number.
-- `read`: read local filesystem files.
-- `http_get`: fetch HTTP/HTTPS URLs with timeout and response-size limits.
 
 ## Workspace
 
