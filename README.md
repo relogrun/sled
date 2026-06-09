@@ -72,15 +72,12 @@ Use `cargo run -p sled-cli -- <command>` during development.
 - `init <dir>` — create the dialog directory and `_system.json5` (optional, because `say`/`run` can create it).
 - `say <dir> <text>` — add a user message and proceed when the dialog is waiting.
 - `run <dir>` — continue execution until done, waiting, or error.
+  - `--provider <operator|openai|anthropic>`
+  - `--model <model>`
+  - `--k <n>` to include only the last `n` message bodies
+  - `--body-mirror` to write readable `.done.md` mirrors beside JSON5 files
 - `context <dir>` — show the exact prompt, index, and bodies sent to the model.
 - `status <dir>` — print the current cursor and latest message.
-
-Useful `run` options:
-
-- `--provider <operator|openai|anthropic>`
-- `--model <model>`
-- `--k <n>` to include only the last `n` message bodies
-- `--body-mirror` to write readable `.done.md` mirrors beside JSON5 files
 
 Every command has help:
 
