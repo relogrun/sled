@@ -1,0 +1,19 @@
+[package]
+name = "sled-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "sled"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dotenvy.workspace = true
+sled-ai = { path = "../sled-ai" }
+sled-core = { path = "../sled-core" }
+sled-tools = { path = "../sled-tools" }
+tokio.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "sled-tools"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+sled-core = { path = "../sled-core" }
+tracing.workspace = true
