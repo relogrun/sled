@@ -69,13 +69,11 @@ cargo run -p sled-cli -- run ./dialog --provider operator
 
 Use `cargo run -p sled-cli -- <command>` during development.
 
-| Command | Description |
-| --- | --- |
-| `init <dir>` | Create the dialog directory and `_system.json5`. Optional because `say` and `run` create missing files. |
-| `say <dir> <text>` | Add a user message. Fills `waiting` when present, otherwise creates `user.done`. |
-| `run <dir>` | Run until the dialog finishes, waits for the user, or hits an error. |
-| `context <dir>` | Print the system prompt, file index, and bodies exactly as the model sees them. |
-| `status <dir>` | Print the current cursor and latest message. |
+- `init <dir>` — create the dialog directory and `_system.json5` (optional, because `say`/`run` can create it).
+- `say <dir> <text>` — add a user message and proceed when the dialog is waiting.
+- `run <dir>` — continue execution until done, waiting, or error.
+- `context <dir>` — show the exact prompt, index, and bodies sent to the model.
+- `status <dir>` — print the current cursor and latest message.
 
 Useful `run` options:
 
