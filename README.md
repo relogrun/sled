@@ -1,8 +1,10 @@
 # sled
 
-An AI dialog runner with no hidden state.
+File-backed AI dialog runner.
 
-A dialog is a directory. Every message is a file. The filenames show whose turn it is and what is in flight. `ls` shows you the whole run, and a text editor lets you inspect, repair, or replay any step. There is nothing else: no database, no separate state file, no in-memory state that survives the process.
+Built for one human and one model: a quiet workbench for unhurried, hands-on research dialog, sled deliberately trades scale for legibility — no concurrent users, no parallel runs, no server.
+
+A dialog is a directory. Every message is a file. The filenames show whose turn it is and what is in flight. `ls` shows you the whole run, and a text editor lets you inspect, repair, or replay any step. There is nothing else: no database, no separate state file, no in-memory state that survives the process. 
 
 Each filled message is a JSON5 file named by slot, role, and status:
 
