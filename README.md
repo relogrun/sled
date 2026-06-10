@@ -14,24 +14,25 @@ Each filled message is a JSON5 file named by slot, role, and status:
 0001.user.done.json5
 0002.running.json5
 0003.tool.pending.json5
+0004.tool.needs-input.json5
 ```
 
-An open slot has no role yet: `0002.running.json5` or `0004.input.json5`. A `running` slot gets its role when the model writes either an assistant message or a tool call. An `input` slot gets role `user` when you write your reply. After content is written, the role never changes.
+A `running` slot has no role yet because the model may write either an assistant message or a tool call. A `needs-input` slot has a role because the target is already known: `0001.user.needs-input.json5` waits for a user message, and `0004.tool.needs-input.json5` waits for an answer that completes the same tool file. After content is written, the role never changes.
 
-Only one non-terminal file may exist at a time: `running`, `pending`, or `input`. The status names who must act:
+Only one non-terminal file may exist at a time: `running`, `pending`, or `needs-input`. The status names who must act:
 
 - `running` — the model is taking its turn
 - `pending` — the runner must finish a tool call
-- `input` — you must reply
+- `needs-input` — you must reply, either to the dialog or to a suspended tool
 - `done` — closed
 
 ### Guarantees
 
 At most one non-terminal file may exist in a dialog. If the runner sees more than one, it exits with an error and touches nothing. A message body or tool result is fully written before the file moves to its next status; a status change is a single atomic `rename`.
 
-Restart `run` after a crash and the runner continues from the one non-terminal file. A filled `running` file is closed. A `pending` tool file with a result is closed. A `pending` tool file without a result is executed, so tools with side effects must be idempotent across crash recovery.
+Restart `run` after a crash and the runner continues from the one non-terminal file. A filled `running` file is closed. A `pending` tool file with a result is closed. A `pending` tool file with a suspension request becomes `tool.needs-input`. A `pending` tool file without either is executed, so tools with side effects must be idempotent across crash recovery.
 
-An empty open slot has only a number and status. Once content is written, the filename gets its role from the message body. After that, number and role do not change; only status changes.
+An empty `running` slot has only a number and status. A `needs-input` slot has a role because it names who needs the human input. Once content is written, number and role do not change; only status changes.
 
 ## Contents
 
@@ -50,7 +51,7 @@ An empty open slot has only a number and status. Once content is written, the fi
 
 If `cargo` is not installed yet, install the Rust toolchain from the official [Rust install page](https://www.rust-lang.org/tools/install). `cargo` is installed with Rust.
 
-You usually work in a `say` / `run` loop: `say` writes what you say, and `run` lets the model react until it finishes, asks for input, or needs a tool result.
+You usually work in a `say` / `run` loop: `say` writes what you say to whoever is waiting, and `run` lets the model react until it finishes, asks for input, or needs a tool result.
 
 Create a dialog and add a user message:
 
@@ -91,10 +92,10 @@ Use `cargo run -p sled-cli -- <command>` during development.
 - `init <dir>` — create the dialog directory, `_system.json5`, and `_config.json5`. Optional.
   - `--system <text>` to set custom system instructions.
   - `--system-file <path>` to read custom system instructions from a file.
-- `say <dir> <text>` — add a user message and proceed when the dialog needs input.
+- `say <dir> <text>` — send text to whoever is waiting. With no open file, it creates a user message. With `user.needs-input`, it fills a user reply. With `tool.needs-input`, it fills the suspended tool answer.
   - `--run` to start the runner immediately after writing the message, using the same config/defaults as `run`.
   - `--body-mirror` to save markdown body mirrors as enabled. Default: off.
-- `run <dir>` — continue execution until done, input, or error.
+- `run <dir>` — continue execution until done, needs-input, or error.
   - `--provider <operator|openai|openai-compatible|anthropic>` to set the provider. Default: `openai`.
   - `--model <model>` to set the provider model. Defaults: `openai=gpt-5.5`, `anthropic=claude-sonnet-4-6`; `openai-compatible` requires one.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
@@ -236,7 +237,9 @@ cargo run -p sled-cli -- context ./dialog
 
 ## Tools
 
-Tool files are executed sequentially by the runner: one `tool.pending` file at a time, in slot order. A single tool may still batch work internally — the protocol prompt instructs the model to put one batched request (several paths, several URLs) into one tool call whenever the next step does not depend on each intermediate result, so a sequential protocol does not mean one file per item. Each tool request and its result live in the same `tool.pending` file, which is renamed to `done` after execution.
+Tool files are executed sequentially by the runner: one `tool.pending` file at a time, in slot order. A single tool may still batch work internally — the protocol prompt instructs the model to put one batched request (several paths, several URLs) into one tool call whenever the next step does not depend on each intermediate result, so a sequential protocol does not mean one file per item.
+
+Each tool request and its result live in the same file. A completed tool is renamed from `tool.pending` to `tool.done`. A suspending tool writes a request for human input and becomes `tool.needs-input`; `say` or a manual edit fills the answer, then the same file becomes `tool.done`.
 
 Built-in tools:
 
@@ -271,7 +274,7 @@ The two main control points are tools, which let the model act, and folds, which
 
 ### Adding a Tool
 
-Add a tool when the model needs a new action. Tools live in `sled-tools`; each built-in tool has its own source file. Implement the `Tool` trait, register it in `ToolRegistry::with_defaults`, and describe the tool in `prompts/reply_protocol.md` so the model knows how to call it. A tool receives JSON args and writes one JSON result into the same `tool.pending` file.
+Add a tool when the model needs a new action. Each built-in tool in `sled-tools` has its own source file. Implement the `Tool` trait and return `ToolResult::Completed(value)` for a normal result or `ToolResult::Suspended(request)` when a human must answer before the tool call can finish. Register the tool in a `ToolRegistry`, pass it through a `Profile`, and add a protocol prompt fragment so the model knows how to call it.
 
 ### Adding a Fold
 

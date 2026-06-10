@@ -317,7 +317,7 @@ async fn run_dialog(
     )
     .await?
     {
-        StepOutcome::Input(path) => println!("input requested: {}", path.display()),
+        StepOutcome::NeedsInput(path) => println!("needs input: {}", path.display()),
         StepOutcome::Finished(Some(num)) => println!("finished at {num:04}"),
         StepOutcome::Finished(None) => println!("finished"),
         StepOutcome::Continue => unreachable!(),

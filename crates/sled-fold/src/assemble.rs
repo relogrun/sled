@@ -135,6 +135,14 @@ fn body_section(slot: &Slot, role: &str, msg: &Message) -> String {
     }
     if let Some(result) = &msg.result {
         section.push_str(&format!("result: {}\n", result));
+    } else if let Some(answer) = msg.suspension.as_ref().and_then(|s| s.answer.as_ref()) {
+        section.push_str(&format!("result: {{\"ok\":true,\"answer\":{answer}}}\n"));
+    }
+    if let Some(suspension) = &msg.suspension {
+        section.push_str(&format!("suspension_request: {}\n", suspension.request));
+        if let Some(answer) = &suspension.answer {
+            section.push_str(&format!("suspension_answer: {}\n", answer));
+        }
     }
     section.push('\n');
     section

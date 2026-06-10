@@ -3,6 +3,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use reqwest::{Client, Url, redirect::Policy};
 use serde_json::{Value, json};
+use sled_core::ToolResult;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -32,7 +33,7 @@ impl Tool for HttpGetTool {
         "http_get"
     }
 
-    async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<Value> {
+    async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<ToolResult> {
         let urls = parse_urls(&args);
         let max_bytes = args["max_bytes"]
             .as_u64()
@@ -54,7 +55,9 @@ impl Tool for HttpGetTool {
             );
         }
 
-        Ok(json!({"ok": true, "sections": sections}))
+        Ok(ToolResult::completed(
+            json!({"ok": true, "sections": sections}),
+        ))
     }
 }
 

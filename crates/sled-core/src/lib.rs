@@ -15,11 +15,11 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = concat!(
 );
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Status {
     Running,
     Pending,
-    Input,
+    NeedsInput,
     Done,
 }
 
@@ -28,7 +28,7 @@ impl Status {
         match self {
             Status::Running => "running",
             Status::Pending => "pending",
-            Status::Input => "input",
+            Status::NeedsInput => "needs-input",
             Status::Done => "done",
         }
     }
@@ -37,7 +37,7 @@ impl Status {
         Some(match s {
             "running" => Self::Running,
             "pending" => Self::Pending,
-            "input" => Self::Input,
+            "needs-input" => Self::NeedsInput,
             "done" => Self::Done,
             _ => return None,
         })
@@ -68,11 +68,16 @@ pub struct Message {
     pub call: Option<Call>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspension: Option<ToolSuspension>,
 }
 
 impl Message {
     pub fn filled(&self) -> bool {
-        !self.body.is_empty() || self.call.is_some() || self.result.is_some()
+        !self.body.is_empty()
+            || self.call.is_some()
+            || self.result.is_some()
+            || self.suspension.is_some()
     }
 }
 
@@ -87,6 +92,13 @@ pub struct Call {
     pub tool: String,
     #[serde(default)]
     pub args: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolSuspension {
+    pub request: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -154,13 +166,29 @@ pub trait Model: Send + Sync {
 
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
-    async fn execute(&self, slots: &[Slot], call: &Call) -> Result<Value>;
+    async fn execute(&self, slots: &[Slot], call: &Call) -> Result<ToolResult>;
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ToolResult {
+    Completed(Value),
+    Suspended(Value),
+}
+
+impl ToolResult {
+    pub fn completed(value: Value) -> Self {
+        Self::Completed(value)
+    }
+
+    pub fn suspended(request: Value) -> Self {
+        Self::Suspended(request)
+    }
 }
 
 #[derive(Clone, Debug)]
 pub enum StepOutcome {
     Continue,
-    Input(PathBuf),
+    NeedsInput(PathBuf),
     Finished(Option<u32>),
 }
 
@@ -367,7 +395,8 @@ fn role_for_path(msg: &Message, status: Status, fallback: Option<&str>) -> Optio
         return Some(sanitize_role(role));
     }
     match status {
-        Status::Running | Status::Input => None,
+        Status::Running => None,
+        Status::NeedsInput => Some("user".into()),
         Status::Pending => Some("tool".into()),
         Status::Done => Some("unknown".into()),
     }
@@ -551,16 +580,16 @@ pub async fn step_with_options(
     let Some(slot) = open else {
         match slots.last() {
             None => {
-                info!(dir = %dir.display(), "empty dialog, creating initial input slot");
+                info!(dir = %dir.display(), "empty dialog, creating initial needs-input slot");
                 write_default_system_config(dir)?;
                 let path = create_slot_with_options(
                     dir,
                     1,
-                    Status::Input,
+                    Status::NeedsInput,
                     &Message::default(),
                     write_options,
                 )?;
-                return Ok(StepOutcome::Input(path));
+                return Ok(StepOutcome::NeedsInput(path));
             }
             Some(last) => {
                 let msg = read_message(&last.path)?;
@@ -586,9 +615,9 @@ pub async fn step_with_options(
     };
 
     match slot.status {
-        Status::Input => {
+        Status::NeedsInput => {
             info!(slot = slot.num, path = %slot.path.display(), "user input requested");
-            Ok(StepOutcome::Input(slot.path.clone()))
+            Ok(StepOutcome::NeedsInput(slot.path.clone()))
         }
         Status::Pending => {
             info!(slot = slot.num, "processing pending tool slot");
@@ -598,14 +627,32 @@ pub async fn step_with_options(
                 set_status(dir, slot, Status::Done)?;
                 return Ok(StepOutcome::Continue);
             }
+            if msg.suspension.is_some() {
+                info!(slot = slot.num, "recovering suspended pending tool slot");
+                let path = set_status(dir, slot, Status::NeedsInput)?;
+                return Ok(StepOutcome::NeedsInput(path));
+            }
             let call = msg
                 .call
                 .clone()
                 .ok_or_else(|| anyhow!("pending slot without call: {}", slot.path.display()))?;
-            msg.result = Some(tools.execute(&slots, &call).await?);
-            write_message_with_options(&slot.path, &msg, write_options)?;
-            set_status(dir, slot, Status::Done)?;
-            Ok(StepOutcome::Continue)
+            match tools.execute(&slots, &call).await? {
+                ToolResult::Completed(result) => {
+                    msg.result = Some(result);
+                    write_message_with_options(&slot.path, &msg, write_options)?;
+                    set_status(dir, slot, Status::Done)?;
+                    Ok(StepOutcome::Continue)
+                }
+                ToolResult::Suspended(request) => {
+                    msg.suspension = Some(ToolSuspension {
+                        request,
+                        answer: None,
+                    });
+                    write_message_with_options(&slot.path, &msg, write_options)?;
+                    let path = set_status(dir, slot, Status::NeedsInput)?;
+                    Ok(StepOutcome::NeedsInput(path))
+                }
+            }
         }
         Status::Running => {
             info!(slot = slot.num, "processing running assistant slot");
@@ -648,7 +695,7 @@ pub async fn step_with_options(
                         create_slot_with_options(
                             dir,
                             slot.num + 1,
-                            Status::Input,
+                            Status::NeedsInput,
                             &Message::default(),
                             write_options,
                         )?;
@@ -715,7 +762,7 @@ pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> 
     let open = validate_single_open(&slots)?;
 
     if let Some(slot) = open {
-        if slot.status != Status::Input {
+        if slot.status != Status::NeedsInput {
             warn!(
                 active = %slot.path.display(),
                 "cannot add user message while another slot is active"
@@ -724,6 +771,19 @@ pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> 
                 "cannot add user message: currently active {}",
                 slot.path.display()
             );
+        }
+        let mut existing = read_message(&slot.path).unwrap_or_default();
+        if is_tool_needs_input(slot, &existing) {
+            let Some(suspension) = &mut existing.suspension else {
+                bail!(
+                    "cannot answer tool needs-input without suspension: {}",
+                    slot.path.display()
+                );
+            };
+            suspension.answer = Some(Value::String(text.into()));
+            existing.result = Some(json_tool_answer(text));
+            write_message_with_options(&slot.path, &existing, write_options)?;
+            return set_status(dir, slot, Status::Done);
         }
         let msg = Message {
             role: "user".into(),
@@ -748,6 +808,19 @@ pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> 
         },
         write_options,
     )
+}
+
+fn is_tool_needs_input(slot: &Slot, msg: &Message) -> bool {
+    slot.status == Status::NeedsInput
+        && (msg.role == "tool" || slot.role.as_deref() == Some("tool"))
+        && msg.filled()
+}
+
+fn json_tool_answer(text: &str) -> Value {
+    serde_json::json!({
+        "ok": true,
+        "answer": text,
+    })
 }
 
 pub fn status_report(dir: &Path) -> Result<String> {
@@ -824,8 +897,10 @@ mod tests {
 
     #[async_trait]
     impl ToolExecutor for FakeTools {
-        async fn execute(&self, _slots: &[Slot], call: &Call) -> Result<Value> {
-            Ok(json!({"ok": true, "tool": call.tool}))
+        async fn execute(&self, _slots: &[Slot], call: &Call) -> Result<ToolResult> {
+            Ok(ToolResult::completed(
+                json!({"ok": true, "tool": call.tool}),
+            ))
         }
     }
 
@@ -833,8 +908,20 @@ mod tests {
 
     #[async_trait]
     impl ToolExecutor for PanicTools {
-        async fn execute(&self, _slots: &[Slot], _call: &Call) -> Result<Value> {
+        async fn execute(&self, _slots: &[Slot], _call: &Call) -> Result<ToolResult> {
             unreachable!("tool should not be executed")
+        }
+    }
+
+    struct SuspendTools;
+
+    #[async_trait]
+    impl ToolExecutor for SuspendTools {
+        async fn execute(&self, _slots: &[Slot], call: &Call) -> Result<ToolResult> {
+            Ok(ToolResult::suspended(json!({
+                "tool": call.tool,
+                "prompt": "answer required"
+            })))
         }
     }
 
@@ -870,22 +957,25 @@ mod tests {
     }
 
     #[test]
-    fn empty_open_slots_have_no_role_in_filename() {
+    fn open_slot_filenames_match_known_roles() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
 
         let running = create_slot(&dir, 1, Status::Running, &Message::default()).unwrap();
-        let input = create_slot(&dir, 2, Status::Input, &Message::default()).unwrap();
+        let needs_input = create_slot(&dir, 2, Status::NeedsInput, &Message::default()).unwrap();
 
         assert_eq!(running.file_name().unwrap(), "0001.running.json5");
-        assert_eq!(input.file_name().unwrap(), "0002.input.json5");
+        assert_eq!(
+            needs_input.file_name().unwrap(),
+            "0002.user.needs-input.json5"
+        );
     }
 
     #[test]
     fn rejects_two_open_slots() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
-        create_slot(&dir, 1, Status::Input, &Message::default()).unwrap();
+        create_slot(&dir, 1, Status::NeedsInput, &Message::default()).unwrap();
         create_slot(&dir, 2, Status::Pending, &Message::default()).unwrap();
         let slots = scan(&dir).unwrap();
         assert!(validate_single_open(&slots).is_err());
@@ -1009,5 +1099,113 @@ mod tests {
         assert_eq!(slots[0].status, Status::Done);
         let msg = read_message(&slots[0].path).unwrap();
         assert_eq!(msg.result.unwrap()["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn pending_tool_can_suspend_into_tool_needs_input() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        create_slot(
+            &dir,
+            1,
+            Status::Pending,
+            &Message {
+                role: "tool".into(),
+                summary: "ask".into(),
+                call: Some(Call {
+                    tool: "ask_human".into(),
+                    args: json!({}),
+                }),
+                ..Message::default()
+            },
+        )
+        .unwrap();
+
+        let outcome = step(&dir, &NoopModel, &SuspendTools, "system", &NoopFold)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, StepOutcome::NeedsInput(_)));
+
+        let slots = scan(&dir).unwrap();
+        assert_eq!(slots[0].status, Status::NeedsInput);
+        assert_eq!(
+            slots[0].path.file_name().unwrap(),
+            "0001.tool.needs-input.json5"
+        );
+        let msg = read_message(&slots[0].path).unwrap();
+        let suspension = msg.suspension.unwrap();
+        assert_eq!(suspension.request["tool"], "ask_human");
+        assert!(suspension.answer.is_none());
+        assert!(msg.result.is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_tool_with_suspension_recovers_to_needs_input_without_reexecution() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        create_slot(
+            &dir,
+            1,
+            Status::Pending,
+            &Message {
+                role: "tool".into(),
+                summary: "ask".into(),
+                call: Some(Call {
+                    tool: "ask_human".into(),
+                    args: json!({}),
+                }),
+                suspension: Some(ToolSuspension {
+                    request: json!({"prompt": "answer required"}),
+                    answer: None,
+                }),
+                ..Message::default()
+            },
+        )
+        .unwrap();
+
+        let outcome = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, StepOutcome::NeedsInput(_)));
+
+        let slots = scan(&dir).unwrap();
+        assert_eq!(slots[0].status, Status::NeedsInput);
+        assert_eq!(
+            slots[0].path.file_name().unwrap(),
+            "0001.tool.needs-input.json5"
+        );
+    }
+
+    #[test]
+    fn say_answers_suspended_tool_needs_input() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        create_slot(
+            &dir,
+            1,
+            Status::NeedsInput,
+            &Message {
+                role: "tool".into(),
+                summary: "ask".into(),
+                call: Some(Call {
+                    tool: "ask_human".into(),
+                    args: json!({}),
+                }),
+                suspension: Some(ToolSuspension {
+                    request: json!({"prompt": "answer required"}),
+                    answer: None,
+                }),
+                ..Message::default()
+            },
+        )
+        .unwrap();
+
+        let path = say(&dir, "human answer").unwrap();
+        assert_eq!(path.file_name().unwrap(), "0001.tool.done.json5");
+
+        let msg = read_message(&path).unwrap();
+        let suspension = msg.suspension.unwrap();
+        assert_eq!(suspension.answer.unwrap(), json!("human answer"));
+        assert_eq!(msg.result.unwrap()["answer"], "human answer");
     }
 }

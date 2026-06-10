@@ -2,6 +2,7 @@ use crate::{Tool, ToolContext};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use sled_core::ToolResult;
 use std::fs;
 
 pub struct ReadTool;
@@ -12,7 +13,7 @@ impl Tool for ReadTool {
         "read"
     }
 
-    async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<Value> {
+    async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<ToolResult> {
         let paths = args["paths"].as_array().cloned().unwrap_or_default();
         let sections: Vec<Value> = paths
             .iter()
@@ -22,6 +23,8 @@ impl Tool for ReadTool {
                 Err(err) => json!({"path": path, "ok": false, "error": err.to_string()}),
             })
             .collect();
-        Ok(json!({"ok": true, "sections": sections}))
+        Ok(ToolResult::completed(
+            json!({"ok": true, "sections": sections}),
+        ))
     }
 }

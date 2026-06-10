@@ -2,7 +2,7 @@ use crate::{Tool, ToolContext};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use sled_core::read_message;
+use sled_core::{ToolResult, read_message};
 
 pub struct OpenTool;
 
@@ -12,7 +12,7 @@ impl Tool for OpenTool {
         "open"
     }
 
-    async fn execute(&self, ctx: &ToolContext, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult> {
         let nums = args["slots"].as_array().cloned().unwrap_or_default();
         let sections: Vec<Value> = nums
             .iter()
@@ -32,6 +32,7 @@ impl Tool for OpenTool {
                             "body": msg.body,
                             "call": msg.call,
                             "result": msg.result,
+                            "suspension": msg.suspension,
                         }),
                         Err(err) => json!({"slot": num, "ok": false, "error": err.to_string()}),
                     },
@@ -39,6 +40,8 @@ impl Tool for OpenTool {
                 },
             )
             .collect();
-        Ok(json!({"ok": true, "sections": sections}))
+        Ok(ToolResult::completed(
+            json!({"ok": true, "sections": sections}),
+        ))
     }
 }
