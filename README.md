@@ -41,7 +41,6 @@ An empty `running` slot has only a number and status. A `needs-input` slot has a
 - [Config](#config)
 - [Dialog Config](#dialog-config)
 - [System Prompt](#system-prompt)
-- [Context](#context)
 - [Tools](#tools)
 - [Workspace](#workspace)
 - [Logging](#logging)
@@ -207,33 +206,6 @@ cargo run -p sled-cli -- init ./dialog --system-file ./system.md
 ```
 
 Built-in sled protocol prompts are always included. `_system.json5` only appends dialog-specific instructions.
-
-## Context
-
-By default, the `all` fold sends every message body in the model context:
-
-```bash
-cargo run -p sled-cli -- context ./dialog
-```
-
-Use the `recent-messages` fold to include only the last `n` messages in the index and bodies:
-
-```bash
-cargo run -p sled-cli -- config ./dialog --recent-messages 4
-cargo run -p sled-cli -- context ./dialog
-cargo run -p sled-cli -- run ./dialog
-```
-
-`RecentMessagesFold` limits both the file index and message bodies. The model can still use the `open` tool for slot numbers it already knows, but hidden slots are not advertised in the current context.
-
-Use `recent-bytes` when the limit should be approximate size rather than message count:
-
-```bash
-cargo run -p sled-cli -- config ./dialog --recent-bytes 120000
-cargo run -p sled-cli -- context ./dialog
-```
-
-`RecentBytesFold` adds body sections from newest to oldest until the next section would exceed the byte budget, and includes index rows only for those selected sections. The budget applies only to `bodies`; the system prompt and selected index rows are outside that limit.
 
 ## Tools
 
