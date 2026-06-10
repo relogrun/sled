@@ -1176,6 +1176,8 @@ dependencies = [
  "async-trait",
  "clap",
  "dotenvy",
+ "json5",
+ "serde",
  "serde_json",
  "sled-ai",
  "sled-core",

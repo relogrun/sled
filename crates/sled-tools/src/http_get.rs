@@ -81,17 +81,17 @@ impl HttpGetTool {
             .unwrap_or_default()
             .to_string();
 
-        if let Some(content_length) = response.content_length() {
-            if content_length > max_bytes {
-                return Ok(json!({
-                    "url": raw_url,
-                    "ok": false,
-                    "status": status,
-                    "final_url": final_url,
-                    "content_type": content_type,
-                    "error": format!("response too large: {content_length} bytes > {max_bytes} bytes"),
-                }));
-            }
+        if let Some(content_length) = response.content_length()
+            && content_length > max_bytes
+        {
+            return Ok(json!({
+                "url": raw_url,
+                "ok": false,
+                "status": status,
+                "final_url": final_url,
+                "content_type": content_type,
+                "error": format!("response too large: {content_length} bytes > {max_bytes} bytes"),
+            }));
         }
 
         let (body, truncated) = read_limited_body(response, max_bytes).await?;

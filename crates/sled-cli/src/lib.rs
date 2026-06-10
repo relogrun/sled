@@ -1,15 +1,17 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 use sled_ai::{ModelOptions, Provider, create_model_with_options, default_model};
 use sled_core::Fold;
 use sled_core::{
-    DEFAULT_SYSTEM_PROMPT, DialogConfig, StepOutcome, SystemConfig, WriteOptions,
-    preview_model_input, read_dialog_config, run_until_stop_with_options, say_with_options,
-    status_report, write_default_system_config, write_dialog_config, write_system_config,
+    DEFAULT_SYSTEM_PROMPT, StepOutcome, SystemConfig, WriteOptions, durable_write,
+    preview_model_input, run_until_stop_with_options, say_with_options, status_report,
+    write_default_system_config, write_system_config,
 };
 use sled_fold::{AllFold, RecentBytesFold, RecentMessagesFold};
 use sled_tools::ToolRegistry;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Parser)]
@@ -42,22 +44,16 @@ enum Command {
     },
     Config {
         dir: PathBuf,
-        #[arg(long, help = "Save provider override (default if unset: openai)")]
+        #[arg(long, help = "Save provider override")]
         provider: Option<Provider>,
-        #[arg(
-            long,
-            help = "Save model override (defaults: openai=gpt-5.5, anthropic=claude-sonnet-4-6; openai-compatible requires one)"
-        )]
+        #[arg(long, help = "Save model override for the selected provider")]
         model: Option<String>,
         #[arg(
             long = "openai-compatible-base-url",
             help = "Save base URL for openai-compatible providers"
         )]
         openai_compatible_base_url: Option<String>,
-        #[arg(
-            long,
-            help = "Clear context limits and use full message context (default)"
-        )]
+        #[arg(long, help = "Clear saved context limits and use full message context")]
         all: bool,
         #[arg(
             long = "recent-messages",
@@ -69,7 +65,7 @@ enum Command {
             help = "Save byte budget for newest body sections"
         )]
         recent_bytes: Option<usize>,
-        #[arg(long, help = "Save markdown body mirrors as enabled (default: off)")]
+        #[arg(long, help = "Save markdown body mirrors as enabled")]
         body_mirror: bool,
     },
     Run {
@@ -78,7 +74,7 @@ enum Command {
         provider: Option<Provider>,
         #[arg(
             long,
-            help = "Model override (defaults: openai=gpt-5.5, anthropic=claude-sonnet-4-6; openai-compatible requires one)"
+            help = "Model override for the selected provider (defaults: openai=gpt-5.5, anthropic=claude-sonnet-4-6; openai-compatible requires one)"
         )]
         model: Option<String>,
         #[arg(
@@ -115,6 +111,38 @@ pub struct Profile {
     pub protocol_prompt: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct DialogConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openai: Option<ProviderModelConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    anthropic: Option<ProviderModelConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openai_compatible: Option<OpenAiCompatibleConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recent_messages: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recent_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    body_mirror: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct ProviderModelConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct OpenAiCompatibleConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
+}
+
 impl Default for Profile {
     fn default() -> Self {
         Self {
@@ -147,9 +175,6 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             } else {
                 write_default_system_config(&dir)?;
             }
-            let config =
-                resolve_dialog_config(DialogConfig::default(), DialogOptionOverrides::default())?;
-            write_dialog_config_if_missing(&dir, &config)?;
             println!("initialized {}", dir.display());
         }
         Command::Say {
@@ -159,7 +184,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             body_mirror,
         } => {
             std::fs::create_dir_all(&dir)?;
-            let config = read_or_create_dialog_config(
+            let (config, _) = read_resolved_dialog_config(
                 &dir,
                 DialogOptionOverrides {
                     body_mirror: body_mirror_override(body_mirror),
@@ -204,7 +229,6 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
                 },
             )?;
             let resolved = resolve_dialog_config(config.clone(), DialogOptionOverrides::default())?;
-            validate_run_config(&resolved)?;
             let _ = build_fold_override(&resolved)?;
             write_dialog_config(&dir, &config)?;
             println!("wrote {}", dir.join("_config.json5").display());
@@ -220,22 +244,16 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             body_mirror,
         } => {
             std::fs::create_dir_all(&dir)?;
-            let (config, config_exists) = read_resolved_dialog_config(
-                &dir,
-                DialogOptionOverrides {
-                    provider,
-                    model,
-                    openai_compatible_base_url,
-                    all,
-                    recent_messages,
-                    recent_bytes,
-                    body_mirror: body_mirror_override(body_mirror),
-                },
-            )?;
-            validate_run_config(&config)?;
-            if !config_exists {
-                write_dialog_config(&dir, &dialog_config_from_resolved(&config))?;
-            }
+            let overrides = DialogOptionOverrides {
+                provider,
+                model,
+                openai_compatible_base_url,
+                all,
+                recent_messages,
+                recent_bytes,
+                body_mirror: body_mirror_override(body_mirror),
+            };
+            let (config, _) = read_resolved_dialog_config(&dir, overrides)?;
             run_dialog(
                 &dir,
                 &profile,
@@ -249,7 +267,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
         }
         Command::Context { dir } => {
             std::fs::create_dir_all(&dir)?;
-            let config = read_or_create_dialog_config(&dir, DialogOptionOverrides::default())?;
+            let (config, _) = read_resolved_dialog_config(&dir, DialogOptionOverrides::default())?;
             let fold_override = build_fold_override(&config)?;
             let fold = selected_fold(&profile, fold_override.as_deref());
             let (system, context) = preview_model_input(&dir, &base_system_prompt, fold)?;
@@ -280,7 +298,7 @@ struct ResolvedDialogConfig {
     body_mirror: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct DialogOptionOverrides {
     provider: Option<Provider>,
     model: Option<String>,
@@ -292,7 +310,7 @@ struct DialogOptionOverrides {
 }
 
 async fn run_dialog(
-    dir: &PathBuf,
+    dir: &Path,
     profile: &Profile,
     system_prompt: &str,
     options: RunOptions,
@@ -330,37 +348,39 @@ fn resolve_dialog_config(
     overrides: DialogOptionOverrides,
 ) -> Result<ResolvedDialogConfig> {
     apply_dialog_option_overrides(&mut config, overrides)?;
-    let provider = match config.provider.as_deref() {
-        Some(provider) => provider.parse()?,
-        None => Provider::OpenAi,
-    };
+    let provider = configured_provider(&config)?;
 
     Ok(ResolvedDialogConfig {
         provider,
-        model: config
-            .model
-            .clone()
+        model: provider_model(&config, provider)
             .or_else(|| default_model(provider).map(str::to_string)),
-        openai_compatible_base_url: config.openai_compatible_base_url.clone(),
+        openai_compatible_base_url: config
+            .openai_compatible
+            .as_ref()
+            .and_then(|config| config.base_url.clone()),
         recent_messages: config.recent_messages,
         recent_bytes: config.recent_bytes,
         body_mirror: config.body_mirror.unwrap_or(false),
     })
 }
 
-fn read_or_create_dialog_config(
-    dir: &PathBuf,
-    overrides: DialogOptionOverrides,
-) -> Result<ResolvedDialogConfig> {
-    let (resolved, file_exists) = read_resolved_dialog_config(dir, overrides)?;
-    if !file_exists {
-        write_dialog_config(dir, &dialog_config_from_resolved(&resolved))?;
+fn read_dialog_config(dir: &Path) -> Result<DialogConfig> {
+    let path = dir.join("_config.json5");
+    if !path.exists() {
+        return Ok(DialogConfig::default());
     }
-    Ok(resolved)
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
+    json5::from_str(&text).with_context(|| format!("could not parse {}", path.display()))
+}
+
+fn write_dialog_config(dir: &Path, config: &DialogConfig) -> Result<()> {
+    let path = dir.join("_config.json5");
+    durable_write(&path, serde_json::to_string_pretty(config)?.as_bytes())
 }
 
 fn read_resolved_dialog_config(
-    dir: &PathBuf,
+    dir: &Path,
     overrides: DialogOptionOverrides,
 ) -> Result<(ResolvedDialogConfig, bool)> {
     let path = dir.join("_config.json5");
@@ -374,26 +394,14 @@ fn read_resolved_dialog_config(
     Ok((resolved, file_exists))
 }
 
-fn write_dialog_config_if_missing(dir: &PathBuf, config: &ResolvedDialogConfig) -> Result<()> {
-    if !dir.join("_config.json5").exists() {
-        write_dialog_config(dir, &dialog_config_from_resolved(config))?;
-    }
-    Ok(())
-}
-
-fn dialog_config_from_resolved(config: &ResolvedDialogConfig) -> DialogConfig {
-    DialogConfig {
-        provider: Some(config.provider.to_string()),
-        model: config.model.clone(),
-        openai_compatible_base_url: config.openai_compatible_base_url.clone(),
-        recent_messages: config.recent_messages,
-        recent_bytes: config.recent_bytes,
-        body_mirror: Some(config.body_mirror),
-    }
+#[cfg(test)]
+fn dialog_config_from_overrides(overrides: DialogOptionOverrides) -> Result<DialogConfig> {
+    let mut config = DialogConfig::default();
+    apply_dialog_option_overrides(&mut config, overrides)?;
+    Ok(config)
 }
 
 fn run_options_from_resolved_config(config: ResolvedDialogConfig) -> Result<RunOptions> {
-    validate_run_config(&config)?;
     let fold_override = build_fold_override(&config)?;
     Ok(RunOptions {
         provider: config.provider,
@@ -404,35 +412,8 @@ fn run_options_from_resolved_config(config: ResolvedDialogConfig) -> Result<RunO
     })
 }
 
-fn validate_run_config(config: &ResolvedDialogConfig) -> Result<()> {
-    if !matches!(config.provider, Provider::OpenAiCompatible) {
-        return Ok(());
-    }
-    if config
-        .model
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-    {
-        anyhow::bail!("--model or _config.model is required for openai-compatible");
-    }
-    if config
-        .openai_compatible_base_url
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-    {
-        anyhow::bail!(
-            "--openai-compatible-base-url or _config.openai_compatible_base_url is required"
-        );
-    }
-    Ok(())
-}
-
 fn apply_dialog_option_overrides(
-    config: &mut sled_core::DialogConfig,
+    config: &mut DialogConfig,
     overrides: DialogOptionOverrides,
 ) -> Result<()> {
     let DialogOptionOverrides {
@@ -448,11 +429,15 @@ fn apply_dialog_option_overrides(
     if let Some(provider) = provider {
         config.provider = Some(provider.to_string());
     }
+    let active_provider = configured_provider(config)?;
     if let Some(model) = model {
-        config.model = Some(model);
+        set_provider_model(config, active_provider, model)?;
     }
     if let Some(openai_compatible_base_url) = openai_compatible_base_url {
-        config.openai_compatible_base_url = Some(openai_compatible_base_url);
+        config
+            .openai_compatible
+            .get_or_insert_with(OpenAiCompatibleConfig::default)
+            .base_url = Some(openai_compatible_base_url);
     }
 
     let fold_overrides = usize::from(all)
@@ -482,6 +467,58 @@ fn apply_dialog_option_overrides(
         config.body_mirror = Some(body_mirror);
     }
 
+    Ok(())
+}
+
+fn configured_provider(config: &DialogConfig) -> Result<Provider> {
+    match config.provider.as_deref() {
+        Some(provider) => provider.parse(),
+        None => Ok(Provider::OpenAi),
+    }
+}
+
+fn provider_model(config: &DialogConfig, provider: Provider) -> Option<String> {
+    match provider {
+        Provider::OpenAi => config
+            .openai
+            .as_ref()
+            .and_then(|config| config.model.clone()),
+        Provider::Anthropic => config
+            .anthropic
+            .as_ref()
+            .and_then(|config| config.model.clone()),
+        Provider::OpenAiCompatible => config
+            .openai_compatible
+            .as_ref()
+            .and_then(|config| config.model.clone()),
+        Provider::Operator => None,
+    }
+}
+
+fn set_provider_model(config: &mut DialogConfig, provider: Provider, model: String) -> Result<()> {
+    match provider {
+        Provider::OpenAi => {
+            config
+                .openai
+                .get_or_insert_with(ProviderModelConfig::default)
+                .model = Some(model);
+        }
+        Provider::Anthropic => {
+            config
+                .anthropic
+                .get_or_insert_with(ProviderModelConfig::default)
+                .model = Some(model);
+        }
+        Provider::OpenAiCompatible => {
+            config
+                .openai_compatible
+                .get_or_insert_with(OpenAiCompatibleConfig::default)
+                .model = Some(model);
+        }
+        Provider::Operator => {
+            anyhow::bail!("--model is not used with provider operator");
+        }
+    }
     Ok(())
 }
 
@@ -549,44 +586,105 @@ mod tests {
     }
 
     #[test]
-    fn write_dialog_config_if_missing_does_not_replace_existing_config() {
+    fn resolving_missing_config_does_not_create_config_file() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
-        write_dialog_config(
-            &dir,
-            &DialogConfig {
-                recent_messages: Some(3),
+
+        let (resolved, file_exists) =
+            read_resolved_dialog_config(&dir, DialogOptionOverrides::default()).unwrap();
+
+        assert!(!file_exists);
+        assert!(matches!(resolved.provider, Provider::OpenAi));
+        assert!(!dir.join("_config.json5").exists());
+    }
+
+    #[test]
+    fn explicit_provider_override_serializes_without_defaults() {
+        let config = dialog_config_from_overrides(DialogOptionOverrides {
+            provider: Some(Provider::Anthropic),
+            ..DialogOptionOverrides::default()
+        })
+        .unwrap();
+
+        assert_eq!(config.provider.as_deref(), Some("anthropic"));
+        assert!(config.openai.is_none());
+        assert!(config.anthropic.is_none());
+        assert!(config.body_mirror.is_none());
+    }
+
+    #[test]
+    fn explicit_model_override_serializes_under_selected_provider() {
+        let config = dialog_config_from_overrides(DialogOptionOverrides {
+            provider: Some(Provider::Anthropic),
+            model: Some("claude-test".into()),
+            ..DialogOptionOverrides::default()
+        })
+        .unwrap();
+
+        assert_eq!(
+            config.anthropic.and_then(|config| config.model).as_deref(),
+            Some("claude-test")
+        );
+        assert!(config.openai.is_none());
+    }
+
+    #[test]
+    fn partial_openai_compatible_config_is_valid_as_saved_config() {
+        let config = dialog_config_from_overrides(DialogOptionOverrides {
+            provider: Some(Provider::OpenAiCompatible),
+            ..DialogOptionOverrides::default()
+        })
+        .unwrap();
+        let resolved = resolve_dialog_config(config, DialogOptionOverrides::default()).unwrap();
+
+        assert!(matches!(resolved.provider, Provider::OpenAiCompatible));
+        assert!(resolved.model.is_none());
+        assert!(resolved.openai_compatible_base_url.is_none());
+        assert!(build_fold_override(&resolved).unwrap().is_none());
+    }
+
+    #[test]
+    fn model_config_is_scoped_to_selected_provider() {
+        let resolved = resolve_dialog_config(
+            DialogConfig {
+                provider: Some("openai".into()),
+                openai: Some(ProviderModelConfig {
+                    model: Some("gpt-5.5".into()),
+                }),
                 ..DialogConfig::default()
+            },
+            DialogOptionOverrides {
+                provider: Some(Provider::Anthropic),
+                ..DialogOptionOverrides::default()
             },
         )
         .unwrap();
 
-        let resolved =
-            resolve_dialog_config(DialogConfig::default(), DialogOptionOverrides::default())
-                .unwrap();
-        write_dialog_config_if_missing(&dir, &resolved).unwrap();
-
-        let config = read_dialog_config(&dir).unwrap();
-        assert_eq!(config.recent_messages, Some(3));
+        assert!(matches!(resolved.provider, Provider::Anthropic));
+        assert_eq!(resolved.model.as_deref(), Some("claude-sonnet-4-6"));
     }
 
     #[test]
-    fn openai_compatible_run_config_requires_model_and_base_url() {
-        let mut config = ResolvedDialogConfig {
-            provider: Provider::OpenAiCompatible,
-            model: None,
-            openai_compatible_base_url: None,
-            recent_messages: None,
-            recent_bytes: None,
-            body_mirror: false,
+    fn model_override_is_saved_under_active_provider() {
+        let mut config = DialogConfig {
+            provider: Some("anthropic".into()),
+            ..DialogConfig::default()
         };
-        assert!(validate_run_config(&config).is_err());
 
-        config.model = Some("openai/gpt-4o-mini".into());
-        assert!(validate_run_config(&config).is_err());
+        apply_dialog_option_overrides(
+            &mut config,
+            DialogOptionOverrides {
+                model: Some("claude-test".into()),
+                ..DialogOptionOverrides::default()
+            },
+        )
+        .unwrap();
 
-        config.openai_compatible_base_url = Some("https://openrouter.ai/api/v1".into());
-        assert!(validate_run_config(&config).is_ok());
+        assert_eq!(
+            config.anthropic.and_then(|config| config.model).as_deref(),
+            Some("claude-test")
+        );
+        assert!(config.openai.is_none());
     }
 
     #[test]

@@ -6,7 +6,7 @@ use sled_core::{Call, Context, Model, Reply};
 use std::io::{self, Write};
 use tracing::{debug, info, warn};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
     Operator,
     OpenAi,
@@ -53,16 +53,6 @@ pub struct ModelOptions {
     pub openai_compatible_base_url: Option<String>,
 }
 
-pub fn create_model(provider: Provider, model: Option<String>) -> Result<Box<dyn Model>> {
-    create_model_with_options(
-        provider,
-        ModelOptions {
-            model,
-            ..ModelOptions::default()
-        },
-    )
-}
-
 pub fn create_model_with_options(
     provider: Provider,
     options: ModelOptions,
@@ -89,14 +79,16 @@ pub fn create_model_with_options(
             }))
         }
         Provider::OpenAiCompatible => {
+            let base_url = required_non_empty(
+                options.openai_compatible_base_url,
+                "--openai-compatible-base-url or _config.openai_compatible.base_url is required",
+            )?;
+            let model = required_non_empty(
+                options.model,
+                "--model or _config.openai_compatible.model is required",
+            )?;
             let api_key = std::env::var("SLED_OPENAI_COMPAT_API_KEY")
                 .context("SLED_OPENAI_COMPAT_API_KEY is required")?;
-            let base_url = options.openai_compatible_base_url.context(
-                "--openai-compatible-base-url or _config.openai_compatible_base_url is required",
-            )?;
-            let model = options
-                .model
-                .context("--model or _config.model is required for openai-compatible")?;
             let endpoint = chat_completions_endpoint(&base_url);
             info!(provider = %provider, model = %model, endpoint = %endpoint, "creating model client");
             Ok(Box::new(OpenAiModel {
@@ -123,6 +115,15 @@ pub fn create_model_with_options(
             }))
         }
     }
+}
+
+fn required_non_empty(value: Option<String>, message: &'static str) -> Result<String> {
+    let value = value.context(message)?;
+    let value = value.trim();
+    if value.is_empty() {
+        bail!(message);
+    }
+    Ok(value.to_string())
 }
 
 pub struct OperatorModel;
@@ -339,6 +340,40 @@ mod tests {
         assert_eq!(
             chat_completions_endpoint("https://example.com/v1/chat/completions"),
             "https://example.com/v1/chat/completions"
+        );
+    }
+
+    fn model_error(options: ModelOptions) -> String {
+        match create_model_with_options(Provider::OpenAiCompatible, options) {
+            Ok(_) => panic!("expected model creation to fail"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[test]
+    fn openai_compatible_requires_model_and_base_url() {
+        let missing_all = model_error(ModelOptions::default());
+        assert_eq!(
+            missing_all,
+            "--openai-compatible-base-url or _config.openai_compatible.base_url is required"
+        );
+
+        let missing_model = model_error(ModelOptions {
+            openai_compatible_base_url: Some("https://example.com/v1".into()),
+            ..ModelOptions::default()
+        });
+        assert_eq!(
+            missing_model,
+            "--model or _config.openai_compatible.model is required"
+        );
+
+        let blank_model = model_error(ModelOptions {
+            model: Some(" ".into()),
+            openai_compatible_base_url: Some("https://example.com/v1".into()),
+        });
+        assert_eq!(
+            blank_model,
+            "--model or _config.openai_compatible.model is required"
         );
     }
 }

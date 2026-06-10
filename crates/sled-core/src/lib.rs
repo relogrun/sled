@@ -101,34 +101,10 @@ pub struct ToolSuspension {
     pub answer: Option<Value>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SystemConfig {
     #[serde(default)]
     pub prompt: String,
-}
-
-impl Default for SystemConfig {
-    fn default() -> Self {
-        Self {
-            prompt: String::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DialogConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openai_compatible_base_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recent_messages: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recent_bytes: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body_mirror: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -306,7 +282,7 @@ fn mirror_file_name(path: &Path, msg: &Message) -> Result<String> {
     Ok(format!("{slot}.{role}.done.md"))
 }
 
-fn durable_write(path: &Path, bytes: &[u8]) -> Result<()> {
+pub fn durable_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = tmp_path(path);
     {
         let mut file =
@@ -427,15 +403,6 @@ pub fn read_system_config(dir: &Path) -> Result<SystemConfig> {
     json5::from_str(&text).with_context(|| format!("could not parse {}", path.display()))
 }
 
-pub fn read_dialog_config(dir: &Path) -> Result<DialogConfig> {
-    let path = dir.join("_config.json5");
-    if !path.exists() {
-        return Ok(DialogConfig::default());
-    }
-    let text = fs::read_to_string(&path)?;
-    json5::from_str(&text).with_context(|| format!("could not parse {}", path.display()))
-}
-
 pub fn write_default_system_config(dir: &Path) -> Result<()> {
     let path = dir.join("_system.json5");
     if path.exists() {
@@ -447,24 +414,6 @@ pub fn write_default_system_config(dir: &Path) -> Result<()> {
 pub fn write_system_config(dir: &Path, config: &SystemConfig) -> Result<()> {
     let path = dir.join("_system.json5");
     durable_write(&path, serde_json::to_string_pretty(&config)?.as_bytes())?;
-    Ok(())
-}
-
-pub fn write_default_dialog_config(dir: &Path) -> Result<()> {
-    let path = dir.join("_config.json5");
-    if path.exists() {
-        return Ok(());
-    }
-    durable_write(
-        &path,
-        serde_json::to_string_pretty(&DialogConfig::default())?.as_bytes(),
-    )?;
-    Ok(())
-}
-
-pub fn write_dialog_config(dir: &Path, config: &DialogConfig) -> Result<()> {
-    let path = dir.join("_config.json5");
-    durable_write(&path, serde_json::to_string_pretty(config)?.as_bytes())?;
     Ok(())
 }
 
@@ -497,18 +446,18 @@ pub fn preview_model_input(
     let mut slots = scan(dir)?;
     validate_single_open(&slots)?;
 
-    if slots.iter().all(|slot| slot.status.terminal()) {
-        if let Some(last) = slots.last() {
-            let msg = read_message(&last.path).unwrap_or_default();
-            let role = message_or_slot_role(&msg, last);
-            if role == "user" || role == "tool" {
-                slots.push(Slot {
-                    num: last.num + 1,
-                    role: None,
-                    status: Status::Running,
-                    path: slot_path(dir, last.num + 1, None, Status::Running),
-                });
-            }
+    if slots.iter().all(|slot| slot.status.terminal())
+        && let Some(last) = slots.last()
+    {
+        let msg = read_message(&last.path).unwrap_or_default();
+        let role = message_or_slot_role(&msg, last);
+        if role == "user" || role == "tool" {
+            slots.push(Slot {
+                num: last.num + 1,
+                role: None,
+                status: Status::Running,
+                path: slot_path(dir, last.num + 1, None, Status::Running),
+            });
         }
     }
 
