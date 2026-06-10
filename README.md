@@ -25,7 +25,7 @@ Only one non-terminal file may exist at a time: `running`, `pending`, or `input`
 - `input` — you must reply
 - `done` — closed
 
-## Guarantees
+### Guarantees
 
 - **One non-terminal file.** At most one non-terminal file may exist in a dialog: `running`, `pending`, or `input`. If the runner sees more than one, it exits with an error and touches nothing.
 - **Content first, then rename.** A message body or tool result is fully written before the file moves to its next status. A status change is a single atomic `rename`.
@@ -35,7 +35,6 @@ Only one non-terminal file may exist at a time: `running`, `pending`, or `input`
 
 ## Contents
 
-- [Guarantees](#guarantees)
 - [Quick Start](#quick-start)
 - [Commands](#commands)
 - [Configuration](#configuration)
