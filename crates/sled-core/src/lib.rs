@@ -19,7 +19,7 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = concat!(
 pub enum Status {
     Running,
     Pending,
-    Waiting,
+    Input,
     Done,
 }
 
@@ -28,7 +28,7 @@ impl Status {
         match self {
             Status::Running => "running",
             Status::Pending => "pending",
-            Status::Waiting => "waiting",
+            Status::Input => "input",
             Status::Done => "done",
         }
     }
@@ -37,7 +37,7 @@ impl Status {
         Some(match s {
             "running" => Self::Running,
             "pending" => Self::Pending,
-            "waiting" => Self::Waiting,
+            "input" => Self::Input,
             "done" => Self::Done,
             _ => return None,
         })
@@ -103,33 +103,35 @@ impl Default for SystemConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DialogConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_compatible_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent_messages: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_mirror: Option<bool>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Context {
     pub index: String,
     pub bodies: String,
 }
 
-struct ContextRow {
-    num: u32,
-    role: String,
-    status: Status,
-    msg: Message,
+pub trait Fold: Send + Sync {
+    fn assemble(&self, slots: &[Slot]) -> Result<Context>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WriteOptions {
     pub body_mirror: bool,
-}
-
-impl WriteOptions {
-    pub fn from_env() -> Self {
-        Self {
-            body_mirror: match std::env::var("SLED_BODY_MIRROR") {
-                Ok(value) => is_truthy(&value),
-                Err(_) => false,
-            },
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -158,7 +160,7 @@ pub trait ToolExecutor: Send + Sync {
 #[derive(Clone, Debug)]
 pub enum StepOutcome {
     Continue,
-    Waiting(PathBuf),
+    Input(PathBuf),
     Finished(Option<u32>),
 }
 
@@ -214,7 +216,7 @@ pub fn read_message(path: &Path) -> Result<Message> {
 }
 
 pub fn write_message(path: &Path, msg: &Message) -> Result<()> {
-    write_message_with_options(path, msg, WriteOptions::from_env())
+    write_message_with_options(path, msg, WriteOptions::default())
 }
 
 pub fn write_message_with_options(path: &Path, msg: &Message, options: WriteOptions) -> Result<()> {
@@ -240,13 +242,6 @@ fn write_message_with_format(path: &Path, msg: &Message, format: MessageWriteFor
         write_markdown_mirror(path, msg)?;
     }
     Ok(())
-}
-
-fn is_truthy(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
 }
 
 fn write_markdown_mirror(path: &Path, msg: &Message) -> Result<()> {
@@ -341,7 +336,7 @@ pub fn set_status(dir: &Path, slot: &Slot, status: Status) -> Result<PathBuf> {
 }
 
 pub fn create_slot(dir: &Path, num: u32, status: Status, msg: &Message) -> Result<PathBuf> {
-    create_slot_with_options(dir, num, status, msg, WriteOptions::from_env())
+    create_slot_with_options(dir, num, status, msg, WriteOptions::default())
 }
 
 pub fn create_slot_with_options(
@@ -372,7 +367,7 @@ fn role_for_path(msg: &Message, status: Status, fallback: Option<&str>) -> Optio
         return Some(sanitize_role(role));
     }
     match status {
-        Status::Running | Status::Waiting => None,
+        Status::Running | Status::Input => None,
         Status::Pending => Some("tool".into()),
         Status::Done => Some("unknown".into()),
     }
@@ -403,13 +398,44 @@ pub fn read_system_config(dir: &Path) -> Result<SystemConfig> {
     json5::from_str(&text).with_context(|| format!("could not parse {}", path.display()))
 }
 
+pub fn read_dialog_config(dir: &Path) -> Result<DialogConfig> {
+    let path = dir.join("_config.json5");
+    if !path.exists() {
+        return Ok(DialogConfig::default());
+    }
+    let text = fs::read_to_string(&path)?;
+    json5::from_str(&text).with_context(|| format!("could not parse {}", path.display()))
+}
+
 pub fn write_default_system_config(dir: &Path) -> Result<()> {
     let path = dir.join("_system.json5");
     if path.exists() {
         return Ok(());
     }
-    let config = SystemConfig::default();
+    write_system_config(dir, &SystemConfig::default())
+}
+
+pub fn write_system_config(dir: &Path, config: &SystemConfig) -> Result<()> {
+    let path = dir.join("_system.json5");
     durable_write(&path, serde_json::to_string_pretty(&config)?.as_bytes())?;
+    Ok(())
+}
+
+pub fn write_default_dialog_config(dir: &Path) -> Result<()> {
+    let path = dir.join("_config.json5");
+    if path.exists() {
+        return Ok(());
+    }
+    durable_write(
+        &path,
+        serde_json::to_string_pretty(&DialogConfig::default())?.as_bytes(),
+    )?;
+    Ok(())
+}
+
+pub fn write_dialog_config(dir: &Path, config: &DialogConfig) -> Result<()> {
+    let path = dir.join("_config.json5");
+    durable_write(&path, serde_json::to_string_pretty(config)?.as_bytes())?;
     Ok(())
 }
 
@@ -433,86 +459,25 @@ pub fn validate_single_open(slots: &[Slot]) -> Result<Option<&Slot>> {
     Ok(open.first().copied())
 }
 
-pub fn build_context(slots: &[Slot], recent_k: Option<usize>) -> Result<Context> {
-    let rows = slots
-        .iter()
-        .map(|slot| {
-            let msg = read_message(&slot.path).unwrap_or_default();
-            ContextRow {
-                num: slot.num,
-                role: message_or_slot_role(&msg, slot),
-                status: slot.status,
-                msg,
-            }
-        })
-        .collect();
-    build_context_from_rows(rows, recent_k)
-}
-
-fn build_context_from_rows(rows: Vec<ContextRow>, recent_k: Option<usize>) -> Result<Context> {
-    debug!(slots = rows.len(), recent_k, "building model context");
-    let mut index = String::new();
-    let mut bodies = String::new();
-    let recent_from = recent_k.map(|k| rows.len().saturating_sub(k));
-
-    for (idx, row) in rows.iter().enumerate() {
-        index.push_str(&format!(
-            "{:04} [{}] {} - {}\n",
-            row.num,
-            row.role,
-            row.status.as_str(),
-            empty_as(&row.msg.summary, "(no summary)")
-        ));
-
-        if recent_from.is_none_or(|from| idx >= from) {
-            bodies.push_str(&format!("--- {:04} [{}] ---\n", row.num, row.role));
-            if !row.msg.body.is_empty() {
-                bodies.push_str(&row.msg.body);
-                bodies.push('\n');
-            }
-            if let Some(call) = &row.msg.call {
-                bodies.push_str(&format!("call: {} {}\n", call.tool, call.args));
-            }
-            if let Some(result) = &row.msg.result {
-                bodies.push_str(&format!("result: {}\n", result));
-            }
-            bodies.push('\n');
-        }
-    }
-
-    Ok(Context { index, bodies })
-}
-
 pub fn preview_model_input(
     dir: &Path,
     default_system: &str,
-    recent_k: Option<usize>,
+    fold: &dyn Fold,
 ) -> Result<(String, Context)> {
     let system_config = read_system_config(dir)?;
-    let slots = scan(dir)?;
+    let mut slots = scan(dir)?;
     validate_single_open(&slots)?;
-
-    let mut rows = Vec::new();
-    for slot in &slots {
-        let msg = read_message(&slot.path).unwrap_or_default();
-        rows.push(ContextRow {
-            num: slot.num,
-            role: message_or_slot_role(&msg, slot),
-            status: slot.status,
-            msg,
-        });
-    }
 
     if slots.iter().all(|slot| slot.status.terminal()) {
         if let Some(last) = slots.last() {
             let msg = read_message(&last.path).unwrap_or_default();
             let role = message_or_slot_role(&msg, last);
             if role == "user" || role == "tool" {
-                rows.push(ContextRow {
+                slots.push(Slot {
                     num: last.num + 1,
-                    role: "none".into(),
+                    role: None,
                     status: Status::Running,
-                    msg: Message::default(),
+                    path: slot_path(dir, last.num + 1, None, Status::Running),
                 });
             }
         }
@@ -520,7 +485,7 @@ pub fn preview_model_input(
 
     Ok((
         resolve_system_prompt(default_system, &system_config),
-        build_context_from_rows(rows, recent_k)?,
+        fold.assemble(&slots)?,
     ))
 }
 
@@ -564,17 +529,9 @@ pub async fn step(
     model: &dyn Model,
     tools: &dyn ToolExecutor,
     system: &str,
-    recent_k: Option<usize>,
+    fold: &dyn Fold,
 ) -> Result<StepOutcome> {
-    step_with_options(
-        dir,
-        model,
-        tools,
-        system,
-        recent_k,
-        WriteOptions::from_env(),
-    )
-    .await
+    step_with_options(dir, model, tools, system, fold, WriteOptions::default()).await
 }
 
 pub async fn step_with_options(
@@ -582,10 +539,10 @@ pub async fn step_with_options(
     model: &dyn Model,
     tools: &dyn ToolExecutor,
     system: &str,
-    recent_k: Option<usize>,
+    fold: &dyn Fold,
     write_options: WriteOptions,
 ) -> Result<StepOutcome> {
-    debug!(dir = %dir.display(), ?recent_k, "runner step start");
+    debug!(dir = %dir.display(), "runner step start");
     fs::create_dir_all(dir)?;
     let system_config = read_system_config(dir)?;
     let slots = scan(dir)?;
@@ -594,16 +551,16 @@ pub async fn step_with_options(
     let Some(slot) = open else {
         match slots.last() {
             None => {
-                info!(dir = %dir.display(), "empty dialog, creating initial waiting slot");
+                info!(dir = %dir.display(), "empty dialog, creating initial input slot");
                 write_default_system_config(dir)?;
                 let path = create_slot_with_options(
                     dir,
                     1,
-                    Status::Waiting,
+                    Status::Input,
                     &Message::default(),
                     write_options,
                 )?;
-                return Ok(StepOutcome::Waiting(path));
+                return Ok(StepOutcome::Input(path));
             }
             Some(last) => {
                 let msg = read_message(&last.path)?;
@@ -629,9 +586,9 @@ pub async fn step_with_options(
     };
 
     match slot.status {
-        Status::Waiting => {
-            info!(slot = slot.num, path = %slot.path.display(), "waiting for user input");
-            Ok(StepOutcome::Waiting(slot.path.clone()))
+        Status::Input => {
+            info!(slot = slot.num, path = %slot.path.display(), "user input requested");
+            Ok(StepOutcome::Input(slot.path.clone()))
         }
         Status::Pending => {
             info!(slot = slot.num, "processing pending tool slot");
@@ -664,7 +621,7 @@ pub async fn step_with_options(
                 return Ok(StepOutcome::Continue);
             }
 
-            let context = build_context(&slots, recent_k)?;
+            let context = fold.assemble(&slots)?;
             let system = resolve_system_prompt(system, &system_config);
             match model.complete(&system, &context).await? {
                 Reply::Final {
@@ -691,7 +648,7 @@ pub async fn step_with_options(
                         create_slot_with_options(
                             dir,
                             slot.num + 1,
-                            Status::Waiting,
+                            Status::Input,
                             &Message::default(),
                             write_options,
                         )?;
@@ -724,17 +681,9 @@ pub async fn run_until_stop(
     model: &dyn Model,
     tools: &dyn ToolExecutor,
     system: &str,
-    recent_k: Option<usize>,
+    fold: &dyn Fold,
 ) -> Result<StepOutcome> {
-    run_until_stop_with_options(
-        dir,
-        model,
-        tools,
-        system,
-        recent_k,
-        WriteOptions::from_env(),
-    )
-    .await
+    run_until_stop_with_options(dir, model, tools, system, fold, WriteOptions::default()).await
 }
 
 pub async fn run_until_stop_with_options(
@@ -742,12 +691,12 @@ pub async fn run_until_stop_with_options(
     model: &dyn Model,
     tools: &dyn ToolExecutor,
     system: &str,
-    recent_k: Option<usize>,
+    fold: &dyn Fold,
     write_options: WriteOptions,
 ) -> Result<StepOutcome> {
-    info!(dir = %dir.display(), ?recent_k, "runner started");
+    info!(dir = %dir.display(), "runner started");
     loop {
-        match step_with_options(dir, model, tools, system, recent_k, write_options).await? {
+        match step_with_options(dir, model, tools, system, fold, write_options).await? {
             StepOutcome::Continue => continue,
             other => return Ok(other),
         }
@@ -755,7 +704,7 @@ pub async fn run_until_stop_with_options(
 }
 
 pub fn say(dir: &Path, text: &str) -> Result<PathBuf> {
-    say_with_options(dir, text, WriteOptions::from_env())
+    say_with_options(dir, text, WriteOptions::default())
 }
 
 pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> Result<PathBuf> {
@@ -766,7 +715,7 @@ pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> 
     let open = validate_single_open(&slots)?;
 
     if let Some(slot) = open {
-        if slot.status != Status::Waiting {
+        if slot.status != Status::Input {
             warn!(
                 active = %slot.path.display(),
                 "cannot add user message while another slot is active"
@@ -808,9 +757,9 @@ pub fn status_report(dir: &Path) -> Result<String> {
     let mut report = String::new();
     report.push_str(&format!("slots: {}\n", slots.len()));
     if let Some(slot) = open {
-        report.push_str(&format!("cursor: {}\n", slot_file_label(slot)));
+        report.push_str(&format!("non-terminal: {}\n", slot_file_label(slot)));
     } else {
-        report.push_str("cursor: none\n");
+        report.push_str("non-terminal: none\n");
     }
     if let Some(last) = slots.last() {
         let msg = read_message(&last.path).unwrap_or_default();
@@ -857,6 +806,17 @@ mod tests {
     impl Model for NoopModel {
         async fn complete(&self, _system: &str, _context: &Context) -> Result<Reply> {
             unreachable!("model should not be called in this test")
+        }
+    }
+
+    struct NoopFold;
+
+    impl Fold for NoopFold {
+        fn assemble(&self, _slots: &[Slot]) -> Result<Context> {
+            Ok(Context {
+                index: String::new(),
+                bodies: String::new(),
+            })
         }
     }
 
@@ -915,86 +875,20 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
 
         let running = create_slot(&dir, 1, Status::Running, &Message::default()).unwrap();
-        let waiting = create_slot(&dir, 2, Status::Waiting, &Message::default()).unwrap();
+        let input = create_slot(&dir, 2, Status::Input, &Message::default()).unwrap();
 
         assert_eq!(running.file_name().unwrap(), "0001.running.json5");
-        assert_eq!(waiting.file_name().unwrap(), "0002.waiting.json5");
+        assert_eq!(input.file_name().unwrap(), "0002.input.json5");
     }
 
     #[test]
     fn rejects_two_open_slots() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
-        create_slot(&dir, 1, Status::Waiting, &Message::default()).unwrap();
+        create_slot(&dir, 1, Status::Input, &Message::default()).unwrap();
         create_slot(&dir, 2, Status::Pending, &Message::default()).unwrap();
         let slots = scan(&dir).unwrap();
         assert!(validate_single_open(&slots).is_err());
-    }
-
-    #[test]
-    fn context_without_limit_includes_all_bodies() {
-        let dir = temp_dir();
-        fs::create_dir_all(&dir).unwrap();
-        create_slot(
-            &dir,
-            1,
-            Status::Done,
-            &Message {
-                role: "user".into(),
-                body: "first-body".into(),
-                ..Message::default()
-            },
-        )
-        .unwrap();
-        create_slot(
-            &dir,
-            2,
-            Status::Done,
-            &Message {
-                role: "assistant".into(),
-                body: "second-body".into(),
-                ..Message::default()
-            },
-        )
-        .unwrap();
-
-        let slots = scan(&dir).unwrap();
-        let context = build_context(&slots, None).unwrap();
-        assert!(context.bodies.contains("first-body"));
-        assert!(context.bodies.contains("second-body"));
-    }
-
-    #[test]
-    fn context_limit_includes_only_last_k_bodies() {
-        let dir = temp_dir();
-        fs::create_dir_all(&dir).unwrap();
-        create_slot(
-            &dir,
-            1,
-            Status::Done,
-            &Message {
-                role: "user".into(),
-                body: "first-body".into(),
-                ..Message::default()
-            },
-        )
-        .unwrap();
-        create_slot(
-            &dir,
-            2,
-            Status::Done,
-            &Message {
-                role: "assistant".into(),
-                body: "second-body".into(),
-                ..Message::default()
-            },
-        )
-        .unwrap();
-
-        let slots = scan(&dir).unwrap();
-        let context = build_context(&slots, Some(1)).unwrap();
-        assert!(!context.bodies.contains("first-body"));
-        assert!(context.bodies.contains("second-body"));
     }
 
     #[test]
@@ -1073,7 +967,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = step(&dir, &NoopModel, &FakeTools, "system", None)
+        let outcome = step(&dir, &NoopModel, &FakeTools, "system", &NoopFold)
             .await
             .unwrap();
         assert!(matches!(outcome, StepOutcome::Continue));
@@ -1106,7 +1000,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = step(&dir, &NoopModel, &PanicTools, "system", None)
+        let outcome = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
             .await
             .unwrap();
         assert!(matches!(outcome, StepOutcome::Continue));

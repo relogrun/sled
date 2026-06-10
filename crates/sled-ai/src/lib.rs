@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 pub enum Provider {
     Operator,
     OpenAi,
+    OpenAiCompatible,
     Anthropic,
 }
 
@@ -20,6 +21,7 @@ impl std::str::FromStr for Provider {
         Ok(match value {
             "operator" => Self::Operator,
             "openai" => Self::OpenAi,
+            "openai-compatible" => Self::OpenAiCompatible,
             "anthropic" => Self::Anthropic,
             other => bail!("unknown provider: {other}"),
         })
@@ -31,12 +33,40 @@ impl std::fmt::Display for Provider {
         f.write_str(match self {
             Self::Operator => "operator",
             Self::OpenAi => "openai",
+            Self::OpenAiCompatible => "openai-compatible",
             Self::Anthropic => "anthropic",
         })
     }
 }
 
+pub fn default_model(provider: Provider) -> Option<&'static str> {
+    match provider {
+        Provider::OpenAi => Some("gpt-5.5"),
+        Provider::Anthropic => Some("claude-sonnet-4-6"),
+        Provider::Operator | Provider::OpenAiCompatible => None,
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ModelOptions {
+    pub model: Option<String>,
+    pub openai_compatible_base_url: Option<String>,
+}
+
 pub fn create_model(provider: Provider, model: Option<String>) -> Result<Box<dyn Model>> {
+    create_model_with_options(
+        provider,
+        ModelOptions {
+            model,
+            ..ModelOptions::default()
+        },
+    )
+}
+
+pub fn create_model_with_options(
+    provider: Provider,
+    options: ModelOptions,
+) -> Result<Box<dyn Model>> {
     match provider {
         Provider::Operator => {
             info!(provider = %provider, "creating model client");
@@ -44,18 +74,47 @@ pub fn create_model(provider: Provider, model: Option<String>) -> Result<Box<dyn
         }
         Provider::OpenAi => {
             let api_key = std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY is required")?;
-            let model = model.unwrap_or_else(|| "gpt-5.5".into());
+            let model = options.model.unwrap_or_else(|| {
+                default_model(provider)
+                    .expect("OpenAI has a default")
+                    .into()
+            });
             info!(provider = %provider, model = %model, "creating model client");
             Ok(Box::new(OpenAiModel {
                 client: Client::new(),
                 api_key,
                 model,
+                endpoint: "https://api.openai.com/v1/chat/completions".into(),
+                provider,
+            }))
+        }
+        Provider::OpenAiCompatible => {
+            let api_key = std::env::var("SLED_OPENAI_COMPAT_API_KEY")
+                .context("SLED_OPENAI_COMPAT_API_KEY is required")?;
+            let base_url = options.openai_compatible_base_url.context(
+                "--openai-compatible-base-url or _config.openai_compatible_base_url is required",
+            )?;
+            let model = options
+                .model
+                .context("--model or _config.model is required for openai-compatible")?;
+            let endpoint = chat_completions_endpoint(&base_url);
+            info!(provider = %provider, model = %model, endpoint = %endpoint, "creating model client");
+            Ok(Box::new(OpenAiModel {
+                client: Client::new(),
+                api_key,
+                model,
+                endpoint,
+                provider,
             }))
         }
         Provider::Anthropic => {
             let api_key =
                 std::env::var("ANTHROPIC_API_KEY").context("ANTHROPIC_API_KEY is required")?;
-            let model = model.unwrap_or_else(|| "claude-sonnet-4-6".into());
+            let model = options.model.unwrap_or_else(|| {
+                default_model(provider)
+                    .expect("Anthropic has a default")
+                    .into()
+            });
             info!(provider = %provider, model = %model, "creating model client");
             Ok(Box::new(AnthropicModel {
                 client: Client::new(),
@@ -71,10 +130,7 @@ pub struct OperatorModel;
 #[async_trait]
 impl Model for OperatorModel {
     async fn complete(&self, system: &str, context: &Context) -> Result<Reply> {
-        info!(
-            provider = "operator",
-            "waiting for operator assistant input"
-        );
+        info!(provider = "operator", "reading operator assistant input");
         println!(
             "\n=== context ===\n[system]\n{}\n\n[index]\n{}\n[bodies]\n{}",
             system, context.index, context.bodies
@@ -120,12 +176,14 @@ pub struct OpenAiModel {
     client: Client,
     api_key: String,
     model: String,
+    endpoint: String,
+    provider: Provider,
 }
 
 #[async_trait]
 impl Model for OpenAiModel {
     async fn complete(&self, system: &str, context: &Context) -> Result<Reply> {
-        info!(provider = "openai", model = %self.model, "sending model request");
+        info!(provider = %self.provider, model = %self.model, "sending model request");
         debug!(
             index_bytes = context.index.len(),
             bodies_bytes = context.bodies.len(),
@@ -138,7 +196,7 @@ impl Model for OpenAiModel {
         );
         let response: Value = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
+            .post(&self.endpoint)
             .bearer_auth(&self.api_key)
             .json(&json!({
                 "model": self.model,
@@ -153,11 +211,20 @@ impl Model for OpenAiModel {
             .json()
             .await?;
 
-        info!(provider = "openai", model = %self.model, "received model response");
+        info!(provider = %self.provider, model = %self.model, "received model response");
         let text = response["choices"][0]["message"]["content"]
             .as_str()
-            .ok_or_else(|| anyhow!("empty OpenAI response: {response}"))?;
+            .ok_or_else(|| anyhow!("empty OpenAI-compatible response: {response}"))?;
         parse_reply(text)
+    }
+}
+
+fn chat_completions_endpoint(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.ends_with("/chat/completions") {
+        trimmed.into()
+    } else {
+        format!("{trimmed}/chat/completions")
     }
 }
 
@@ -246,4 +313,32 @@ fn shorten(text: &str, limit: usize) -> String {
         .chars()
         .take(limit)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_openai_compatible_provider() {
+        let provider = "openai-compatible".parse::<Provider>().unwrap();
+        assert!(matches!(provider, Provider::OpenAiCompatible));
+        assert_eq!(provider.to_string(), "openai-compatible");
+    }
+
+    #[test]
+    fn builds_chat_completions_endpoint() {
+        assert_eq!(
+            chat_completions_endpoint("https://example.com/v1"),
+            "https://example.com/v1/chat/completions"
+        );
+        assert_eq!(
+            chat_completions_endpoint("https://example.com/v1/"),
+            "https://example.com/v1/chat/completions"
+        );
+        assert_eq!(
+            chat_completions_endpoint("https://example.com/v1/chat/completions"),
+            "https://example.com/v1/chat/completions"
+        );
+    }
 }

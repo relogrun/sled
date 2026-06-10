@@ -14,6 +14,7 @@ clap.workspace = true
 dotenvy.workspace = true
 sled-ai = { path = "../sled-ai" }
 sled-core = { path = "../sled-core" }
+sled-fold = { path = "../sled-fold" }
 sled-tools = { path = "../sled-tools" }
 tokio.workspace = true
 tracing-subscriber.workspace = true

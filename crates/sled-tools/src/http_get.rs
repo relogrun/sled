@@ -1,7 +1,7 @@
 use crate::{Tool, ToolContext};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use reqwest::{Client, Url};
+use reqwest::{Client, Url, redirect::Policy};
 use serde_json::{Value, json};
 use std::net::IpAddr;
 use std::time::Duration;
@@ -18,7 +18,10 @@ pub struct HttpGetTool {
 impl Default for HttpGetTool {
     fn default() -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .expect("http_get client configuration is valid"),
         }
     }
 }
@@ -88,14 +91,7 @@ impl HttpGetTool {
             }
         }
 
-        let bytes = response.bytes().await?;
-        let truncated = bytes.len() as u64 > max_bytes;
-        let body_bytes = if truncated {
-            &bytes[..max_bytes as usize]
-        } else {
-            bytes.as_ref()
-        };
-        let body = String::from_utf8_lossy(body_bytes).into_owned();
+        let (body, truncated) = read_limited_body(response, max_bytes).await?;
 
         Ok(json!({
             "url": raw_url,
@@ -107,6 +103,27 @@ impl HttpGetTool {
             "body": body,
         }))
     }
+}
+
+async fn read_limited_body(
+    mut response: reqwest::Response,
+    max_bytes: u64,
+) -> Result<(String, bool)> {
+    let limit = max_bytes as usize;
+    let mut bytes = Vec::with_capacity(limit.min(8192));
+    let mut truncated = false;
+
+    while let Some(chunk) = response.chunk().await? {
+        let remaining = limit.saturating_sub(bytes.len());
+        if chunk.len() > remaining {
+            bytes.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
 }
 
 fn parse_urls(args: &Value) -> Vec<String> {

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/sled-core",
+    "crates/sled-fold",
     "crates/sled-ai",
     "crates/sled-tools",
     "crates/sled-cli",

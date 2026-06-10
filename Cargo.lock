@@ -1177,6 +1177,7 @@ dependencies = [
  "dotenvy",
  "sled-ai",
  "sled-core",
+ "sled-fold",
  "sled-tools",
  "tokio",
  "tracing-subscriber",
@@ -1192,6 +1193,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "sled-fold"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sled-core",
  "tracing",
 ]
 
