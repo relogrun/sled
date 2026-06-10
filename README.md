@@ -37,12 +37,11 @@ An empty open slot has only a number and status. Once content is written, the fi
 
 - [Quick Start](#quick-start)
 - [Commands](#commands)
-- [Configuration](#configuration)
+- [Config](#config)
 - [Dialog Config](#dialog-config)
 - [System Prompt](#system-prompt)
 - [Context](#context)
 - [Tools](#tools)
-- [Body Mirrors](#body-mirrors)
 - [Workspace](#workspace)
 - [Logging](#logging)
 - [Customization](#customization)
@@ -121,7 +120,7 @@ cargo run -p sled-cli -- --help
 cargo run -p sled-cli -- run --help
 ```
 
-## Configuration
+## Config
 
 Copy `.env.example` to `.env` and fill the values you need:
 
@@ -246,18 +245,6 @@ Built-in tools:
 - `http_get`: fetch HTTP/HTTPS URLs with timeout and response-size limits. Redirects are not followed, and local/private IP targets are rejected.
 
 `read` intentionally has no path sandbox. sled is built for a trusted, single-user local workspace where the person running the tool controls the files it can inspect.
-
-## Body Mirrors
-
-Message bodies always stay inline in JSON5 as the source of truth. Set `body_mirror: true` in `_config.json5` or pass `--body-mirror` to also write readable markdown mirrors:
-
-```bash
-cargo run -p sled-cli -- say ./dialog "hello" --body-mirror
-```
-
-Mirror names use the final message shape, for example `0002.assistant.done.md`. The runner ignores `.md` mirrors when building context.
-
-Mirrors are write-time projections: if you edit a JSON5 body by hand, its mirror goes stale until the file is written again. Treat mirrors as a view, never as a place to edit.
 
 ## Workspace
 
