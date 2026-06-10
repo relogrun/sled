@@ -274,7 +274,7 @@ The two main control points are tools, which let the model act, and folds, which
 
 ### Adding a Tool
 
-Add a tool when the model needs a new action. Each built-in tool in `sled-tools` has its own source file. Implement the `Tool` trait and return `ToolResult::Completed(value)` for a normal result or `ToolResult::Suspended(request)` when a human must answer before the tool call can finish. Register the tool in a `ToolRegistry`, pass it through a `Profile`, and add a protocol prompt fragment so the model knows how to call it.
+Add a tool when the model needs a new action. Each built-in tool in `sled-tools` has its own source file. Implement the `Tool` trait and return `ToolResult::Completed(value)` for a normal result or `ToolResult::Suspended(request)` when a human must answer before the tool call can finish. Register the tool in a `ToolRegistry`, pass it through a `Profile`, and add a protocol prompt fragment so the model knows how to call it. Start from `ToolRegistry::with_defaults()` to include built-ins, or `ToolRegistry::new()` to exclude them. See `crates/sled-cli/examples/custom_profile.rs` for a minimal custom binary.
 
 ### Adding a Fold
 

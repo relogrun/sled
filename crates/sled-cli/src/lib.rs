@@ -588,4 +588,16 @@ mod tests {
         config.openai_compatible_base_url = Some("https://openrouter.ai/api/v1".into());
         assert!(validate_run_config(&config).is_ok());
     }
+
+    #[test]
+    fn profile_system_prompt_appends_protocol_prompt() {
+        let profile = Profile {
+            protocol_prompt: Some("Custom protocol text.".into()),
+            ..Profile::default()
+        };
+
+        let prompt = profile_system_prompt(&profile);
+        assert!(prompt.starts_with(DEFAULT_SYSTEM_PROMPT));
+        assert!(prompt.ends_with("Custom protocol text."));
+    }
 }
