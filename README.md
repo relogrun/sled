@@ -213,6 +213,8 @@ Built-in tools:
 - `http_get`: fetch HTTP/HTTPS URLs with timeout and response-size limits. Redirects are not followed, and local/private IP targets are rejected.
 - `escalate`: ask the human for input when the model cannot continue without a decision or answer. This suspends the tool call as `tool.needs-input`.
 
+`user.needs-input` and `tool.needs-input` are different handoffs. A `user.needs-input` file asks for the next user message in the dialog. A `tool.needs-input` file belongs to an already-started tool call. When you answer it with `say`, sled writes a tool `result`, closes the same file as `tool.done`, and the model continues from that result.
+
 `read` intentionally has no path sandbox. sled is built for a trusted, single-user local workspace where the person running the tool controls the files it can inspect.
 
 ## Workspace
