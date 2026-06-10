@@ -4,9 +4,9 @@ File-based AI dialog runner.
 
 A dialog is a directory. Every message is a file. Status changes are atomic.
 
-Built for direct, hands-on work with models: a quiet workbench for unhurried research dialog where simplicity and observability matter. sled deliberately trades scale for legibility: no concurrent users, no parallel runs, no server. Keep the practical limits of that architecture in mind.
+sled is intentionally simple: one user, no parallel runs, no server. It is built for direct, hands-on work with models when you want to inspect, edit, or replay a research dialog, run model work from scripts or CI, or see the exact context sent to the model.
 
-The filenames show whose turn it is and what is in flight. `ls` shows you the whole run, and a text editor lets you inspect, repair, or replay any step. There is nothing else: no database, no separate state file, no in-memory state that survives the process.
+The filenames show whose turn it is and what is in flight. Tools can automate work while still leaving a clear human handoff through `needs-input`. `ls` shows the whole run, and a text editor lets you inspect, repair, or replay any step. There is nothing else: no database, no separate state file, no in-memory state that survives the process.
 
 Each filled message is a JSON5 file named by slot, role, and status:
 
@@ -17,9 +17,11 @@ Each filled message is a JSON5 file named by slot, role, and status:
 0004.tool.needs-input.json5
 ```
 
-A `running` slot has no role yet because the model may write either an assistant message or a tool call. A `needs-input` slot has a role because the target is already known: `0001.user.needs-input.json5` waits for a user message, and `0004.tool.needs-input.json5` waits for an answer that completes the same tool file. After content is written, the role never changes.
+An open model turn is roleless: `0002.running.json5`. Once content is written, the role never changes.
 
-Only one non-terminal file may exist at a time: `running`, `pending`, or `needs-input`. The status names who must act:
+Only one non-terminal file may exist at a time: `running`, `pending`, or `needs-input`.
+
+The status names who must act:
 
 - `running` — the model is taking its turn
 - `pending` — the runner must finish a tool call
@@ -96,7 +98,7 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--body-mirror` to save markdown body mirrors as enabled. Default: off.
 - `run <dir>` — continue execution until done, needs-input, or error.
   - `--provider <operator|openai|openai-compatible|anthropic>` to set the provider. Default: `openai`.
-  - `--model <model>` to set the selected provider's model. Defaults: `openai=gpt-5.5`, `anthropic=claude-sonnet-4-6`; `openai-compatible` requires one.
+  - `--model <model>` to set the selected provider's model. Defaults: `openai=gpt-5.5` and `anthropic=claude-sonnet-4-6`. `openai-compatible` requires one.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
   - `--all` to use the full message context. Default.
   - `--recent-messages <n>` to use `recent-messages`.
@@ -138,7 +140,7 @@ Use env only for secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `SLED_OPENAI
 
 ## Dialog Config
 
-Each dialog may have `_config.json5` for local, non-secret runtime overrides. The file may be partial; missing keys use built-in defaults. Command-line arguments override it for the current command and are not written back. `config <dir>` creates or updates the file explicitly. If the file is absent, `say`, `run`, and `context` use defaults without creating it.
+Each dialog may have `_config.json5` for local, non-secret runtime overrides. The file may be partial, and missing keys use built-in defaults. Command-line arguments override it for the current command and are not written back. `config <dir>` creates or updates the file explicitly. If the file is absent, `say`, `run`, and `context` use defaults without creating it.
 
 ```json5
 {
@@ -202,7 +204,7 @@ Built-in sled protocol prompts are always included. `_system.json5` only appends
 
 Tool files are executed sequentially by the runner: one `tool.pending` file at a time, in slot order. A single tool may still batch work internally — the protocol prompt instructs the model to put one batched request (several paths, several URLs) into one tool call whenever the next step does not depend on each intermediate result, so a sequential protocol does not mean one file per item.
 
-Each tool request and its result live in the same file. A completed tool is renamed from `tool.pending` to `tool.done`. A suspending tool writes a request for human input and becomes `tool.needs-input`; `say` or a manual edit fills the answer, then the same file becomes `tool.done`.
+Each tool request and its result live in the same file. A completed tool is renamed from `tool.pending` to `tool.done`. A suspending tool writes a request for human input and becomes `tool.needs-input`. Then `say` or a manual edit fills the answer, and the same file becomes `tool.done`.
 
 Built-in tools:
 
@@ -241,4 +243,4 @@ Add a tool when the model needs a new action. Each built-in tool in `sled-tools`
 
 ### Adding a Fold
 
-Add a fold when the model should see a different representation of the dialog. Folds implement `sled_core::Fold` and live in `sled-fold`. A fold receives the scanned slots and returns `Context { index, bodies }`; this is the only place that decides how the directory becomes model context. Existing examples are `AllFold`, `RecentMessagesFold`, and `RecentBytesFold`.
+Add a fold when the model should see a different representation of the dialog. Folds implement `sled_core::Fold` and live in `sled-fold`. A fold receives the scanned slots and returns `Context { index, bodies }`. This is the only place that decides how the directory becomes model context. Existing examples are `AllFold`, `RecentMessagesFold`, and `RecentBytesFold`.
