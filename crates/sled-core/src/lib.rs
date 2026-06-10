@@ -97,8 +97,6 @@ pub struct Call {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolSuspension {
     pub request: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub answer: Option<Value>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -565,6 +563,12 @@ pub async fn step_with_options(
 
     match slot.status {
         Status::NeedsInput => {
+            let msg = read_message(&slot.path).unwrap_or_default();
+            if is_filled_user_needs_input(slot, &msg) || is_completed_tool_needs_input(slot, &msg) {
+                info!(slot = slot.num, "recovering filled needs-input slot");
+                set_status(dir, slot, Status::Done)?;
+                return Ok(StepOutcome::Continue);
+            }
             info!(slot = slot.num, path = %slot.path.display(), "user input requested");
             Ok(StepOutcome::NeedsInput(slot.path.clone()))
         }
@@ -593,10 +597,7 @@ pub async fn step_with_options(
                     Ok(StepOutcome::Continue)
                 }
                 ToolResult::Suspended(request) => {
-                    msg.suspension = Some(ToolSuspension {
-                        request,
-                        answer: None,
-                    });
+                    msg.suspension = Some(ToolSuspension { request });
                     write_message_with_options(&slot.path, &msg, write_options)?;
                     let path = set_status(dir, slot, Status::NeedsInput)?;
                     Ok(StepOutcome::NeedsInput(path))
@@ -723,13 +724,12 @@ pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> 
         }
         let mut existing = read_message(&slot.path).unwrap_or_default();
         if is_tool_needs_input(slot, &existing) {
-            let Some(suspension) = &mut existing.suspension else {
+            if existing.suspension.is_none() {
                 bail!(
                     "cannot answer tool needs-input without suspension: {}",
                     slot.path.display()
                 );
-            };
-            suspension.answer = Some(Value::String(text.into()));
+            }
             existing.result = Some(json_tool_answer(text));
             write_message_with_options(&slot.path, &existing, write_options)?;
             return set_status(dir, slot, Status::Done);
@@ -763,6 +763,18 @@ fn is_tool_needs_input(slot: &Slot, msg: &Message) -> bool {
     slot.status == Status::NeedsInput
         && (msg.role == "tool" || slot.role.as_deref() == Some("tool"))
         && msg.filled()
+}
+
+fn is_completed_tool_needs_input(slot: &Slot, msg: &Message) -> bool {
+    slot.status == Status::NeedsInput
+        && (msg.role == "tool" || slot.role.as_deref() == Some("tool"))
+        && msg.result.is_some()
+}
+
+fn is_filled_user_needs_input(slot: &Slot, msg: &Message) -> bool {
+    slot.status == Status::NeedsInput
+        && (msg.role == "user" || slot.role.as_deref() == Some("user"))
+        && !msg.body.is_empty()
 }
 
 fn json_tool_answer(text: &str) -> Value {
@@ -930,6 +942,60 @@ mod tests {
         assert!(validate_single_open(&slots).is_err());
     }
 
+    fn create_two_needs_input_slots(dir: &Path) {
+        fs::create_dir_all(dir).unwrap();
+        create_slot(
+            dir,
+            1,
+            Status::NeedsInput,
+            &Message {
+                role: "user".into(),
+                summary: "user input".into(),
+                ..Message::default()
+            },
+        )
+        .unwrap();
+        create_slot(
+            dir,
+            2,
+            Status::NeedsInput,
+            &Message {
+                role: "tool".into(),
+                summary: "tool input".into(),
+                call: Some(Call {
+                    tool: "ask_human".into(),
+                    args: json!({}),
+                }),
+                suspension: Some(ToolSuspension {
+                    request: json!({"prompt": "answer required"}),
+                }),
+                ..Message::default()
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn say_rejects_two_needs_input_slots() {
+        let dir = temp_dir();
+        create_two_needs_input_slots(&dir);
+
+        let err = say(&dir, "answer").unwrap_err().to_string();
+        assert!(err.contains("more than one non-terminal file"));
+    }
+
+    #[tokio::test]
+    async fn runner_rejects_two_needs_input_slots() {
+        let dir = temp_dir();
+        create_two_needs_input_slots(&dir);
+
+        let err = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("more than one non-terminal file"));
+    }
+
     #[test]
     fn markdown_mirror_writer_keeps_json_body_as_source_of_truth() {
         let dir = temp_dir();
@@ -1084,7 +1150,6 @@ mod tests {
         let msg = read_message(&slots[0].path).unwrap();
         let suspension = msg.suspension.unwrap();
         assert_eq!(suspension.request["tool"], "ask_human");
-        assert!(suspension.answer.is_none());
         assert!(msg.result.is_none());
     }
 
@@ -1105,7 +1170,6 @@ mod tests {
                 }),
                 suspension: Some(ToolSuspension {
                     request: json!({"prompt": "answer required"}),
-                    answer: None,
                 }),
                 ..Message::default()
             },
@@ -1125,6 +1189,69 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn filled_user_needs_input_recovers_to_done() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        create_slot(
+            &dir,
+            1,
+            Status::NeedsInput,
+            &Message {
+                role: "user".into(),
+                summary: "hello".into(),
+                body: "hello".into(),
+                ..Message::default()
+            },
+        )
+        .unwrap();
+
+        let outcome = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, StepOutcome::Continue));
+
+        let slots = scan(&dir).unwrap();
+        assert_eq!(slots[0].status, Status::Done);
+        assert_eq!(slots[0].path.file_name().unwrap(), "0001.user.done.json5");
+    }
+
+    #[tokio::test]
+    async fn completed_tool_needs_input_recovers_to_done() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        create_slot(
+            &dir,
+            1,
+            Status::NeedsInput,
+            &Message {
+                role: "tool".into(),
+                summary: "ask".into(),
+                call: Some(Call {
+                    tool: "ask_human".into(),
+                    args: json!({}),
+                }),
+                result: Some(json!({"ok": true, "answer": "human answer"})),
+                suspension: Some(ToolSuspension {
+                    request: json!({"prompt": "answer required"}),
+                }),
+                ..Message::default()
+            },
+        )
+        .unwrap();
+
+        let outcome = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, StepOutcome::Continue));
+
+        let slots = scan(&dir).unwrap();
+        assert_eq!(slots[0].status, Status::Done);
+        assert_eq!(slots[0].path.file_name().unwrap(), "0001.tool.done.json5");
+        let msg = read_message(&slots[0].path).unwrap();
+        assert_eq!(msg.result.unwrap()["answer"], "human answer");
+    }
+
     #[test]
     fn say_answers_suspended_tool_needs_input() {
         let dir = temp_dir();
@@ -1142,7 +1269,6 @@ mod tests {
                 }),
                 suspension: Some(ToolSuspension {
                     request: json!({"prompt": "answer required"}),
-                    answer: None,
                 }),
                 ..Message::default()
             },
@@ -1154,7 +1280,7 @@ mod tests {
 
         let msg = read_message(&path).unwrap();
         let suspension = msg.suspension.unwrap();
-        assert_eq!(suspension.answer.unwrap(), json!("human answer"));
+        assert_eq!(suspension.request["prompt"], "answer required");
         assert_eq!(msg.result.unwrap()["answer"], "human answer");
     }
 }

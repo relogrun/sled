@@ -93,7 +93,7 @@ Use `cargo run -p sled-cli -- <command>` during development.
 - `init <dir>` — create the dialog directory and `_system.json5`. Optional.
   - `--system <text>` to set custom system instructions.
   - `--system-file <path>` to read custom system instructions from a file.
-- `say <dir> <text>` — send text to whoever is waiting. With no open file, it creates a user message. With `user.needs-input`, it fills a user reply. With `tool.needs-input`, it fills the suspended tool answer.
+- `say <dir> <text>` — send text to whoever is waiting. With no open file, it creates a user message. With `user.needs-input`, it fills a user reply. With `tool.needs-input`, it writes the suspended tool result.
   - `--run` to start the runner immediately after writing the message, using the same config/defaults as `run`.
   - `--body-mirror` to save markdown body mirrors as enabled. Default: off.
 - `run <dir>` — continue execution until done, needs-input, or error.
@@ -202,15 +202,16 @@ Built-in sled protocol prompts are always included. `_system.json5` only appends
 
 ## Tools
 
-Tool files are executed sequentially by the runner: one `tool.pending` file at a time, in slot order. A single tool may still batch work internally — the protocol prompt instructs the model to put one batched request (several paths, several URLs) into one tool call whenever the next step does not depend on each intermediate result, so a sequential protocol does not mean one file per item.
+Tool files are executed sequentially by the runner: one `tool.pending` file at a time, in slot order. A model turn can request one tool call. A single tool call may still batch work internally — the protocol prompt instructs the model to put one batched request (several paths, several URLs) into one tool call whenever the next step does not depend on each intermediate result, so a sequential protocol does not mean one file per item.
 
-Each tool request and its result live in the same file. A completed tool is renamed from `tool.pending` to `tool.done`. A suspending tool writes a request for human input and becomes `tool.needs-input`. Then `say` or a manual edit fills the answer, and the same file becomes `tool.done`.
+Each tool request and its result live in the same file. A completed tool is renamed from `tool.pending` to `tool.done`. A suspending tool writes a request for human input and becomes `tool.needs-input`. Then `say` or a manual edit writes the result, and the same file becomes `tool.done`.
 
 Built-in tools:
 
 - `open`: open older message bodies by slot number.
 - `read`: read local filesystem files.
 - `http_get`: fetch HTTP/HTTPS URLs with timeout and response-size limits. Redirects are not followed, and local/private IP targets are rejected.
+- `escalate`: ask the human for input when the model cannot continue without a decision or answer. This suspends the tool call as `tool.needs-input`.
 
 `read` intentionally has no path sandbox. sled is built for a trusted, single-user local workspace where the person running the tool controls the files it can inspect.
 

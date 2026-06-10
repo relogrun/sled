@@ -1,4 +1,4 @@
-use crate::{HttpGetTool, OpenTool, ReadTool};
+use crate::{EscalateTool, HttpGetTool, OpenTool, ReadTool};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -32,6 +32,7 @@ impl ToolRegistry {
         registry.register(OpenTool);
         registry.register(ReadTool);
         registry.register(HttpGetTool::default());
+        registry.register(EscalateTool);
         registry
     }
 
@@ -61,5 +62,36 @@ impl ToolExecutor for ToolRegistry {
             slots: slots.to_vec(),
         };
         self.execute(&ctx, call).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn defaults_include_escalate_as_suspending_tool() {
+        let registry = ToolRegistry::with_defaults();
+        let ctx = ToolContext { slots: Vec::new() };
+        let result = registry
+            .execute(
+                &ctx,
+                &Call {
+                    tool: "escalate".into(),
+                    args: json!({"reason": "need a decision"}),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            ToolResult::suspended(json!({
+                "ok": true,
+                "tool": "escalate",
+                "reason": "need a decision"
+            }))
+        );
     }
 }

@@ -38,4 +38,13 @@ or:
   "summary": "fetch URLs"
 }
 
-The `open` tool opens older message bodies by slot number. The `read` tool reads filesystem files in batches. The `http_get` tool fetches HTTP/HTTPS URLs in batches. Request multiple independent files or URLs in one tool call.
+or:
+
+{
+  "type": "tool",
+  "tool": "escalate",
+  "args": { "reason": "I need a human decision before continuing." },
+  "summary": "need human input"
+}
+
+The `open` tool opens older message bodies by slot number. The `read` tool reads filesystem files in batches. The `http_get` tool fetches HTTP/HTTPS URLs in batches. The `escalate` tool suspends the tool call and asks the human for input. Request multiple independent files or URLs in one tool call.
