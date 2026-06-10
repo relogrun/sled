@@ -122,37 +122,23 @@ cargo run -p sled-cli -- run --help
 
 ## Config
 
-Copy `.env.example` to `.env` and fill the values you need:
+Copy `.env.example` to `.env` when you need API keys:
 
 ```bash
 cp .env.example .env
 ```
 
-API keys are read from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `SLED_OPENAI_COMPAT_API_KEY` depending on the provider. Secrets stay in env; do not put API keys in dialog files.
-
-Runtime options are resolved in this order:
+Secrets stay in env. Runtime options are resolved in this order:
 
 1. Command-line arguments.
 2. Dialog-local `_config.json5`.
 3. Built-in defaults.
 
-CLI arguments override `_config.json5` for the current command. Missing config keys fall back to built-in defaults. `init`, `say`, `run`, and `context` create `_config.json5` if it is missing, filled with the current resolved settings. They do not rewrite an existing config.
-
-Use `openai-compatible` for providers that expose the OpenAI Chat Completions shape:
-
-```bash
-SLED_OPENAI_COMPAT_API_KEY=...
-cargo run -p sled-cli -- config ./dialog \
-  --provider openai-compatible \
-  --model openai/gpt-4o-mini \
-  --openai-compatible-base-url https://openrouter.ai/api/v1
-```
-
-Env is only for secrets. Put non-secret runtime settings in `_config.json5` or pass them as command-line arguments.
+Use env only for secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `SLED_OPENAI_COMPAT_API_KEY`. Put non-secret runtime settings in `_config.json5` or pass them as command-line arguments.
 
 ## Dialog Config
 
-Each dialog may have `_config.json5` for local, non-secret runtime settings. The file may be partial; missing keys use built-in defaults. Command-line arguments override it for the current command.
+Each dialog may have `_config.json5` for local, non-secret runtime settings. The file may be partial; missing keys use built-in defaults. Command-line arguments override it for the current command. `init`, `say`, `run`, and `context` create it if it is missing.
 
 ```json5
 {
@@ -175,17 +161,10 @@ Supported keys:
 
 If neither `recent_messages` nor `recent_bytes` is set, sled uses the full message context.
 
-`_config.json5` is the per-dialog runtime config. Use `config` to persist settings, command-line arguments for command-local overrides, and env only for secrets.
-
-You can write it from the CLI:
+Write the file from the CLI when that is easier:
 
 ```bash
-cargo run -p sled-cli -- config ./dialog \
-  --provider openai-compatible \
-  --model openai/gpt-4o-mini \
-  --openai-compatible-base-url https://openrouter.ai/api/v1 \
-  --recent-messages 8 \
-  --body-mirror
+cargo run -p sled-cli -- config ./dialog --recent-messages 8 --body-mirror
 ```
 
 ## System Prompt
