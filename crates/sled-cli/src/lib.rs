@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sled_ai::{ModelOptions, Provider, create_model_with_options, default_model};
+use sled_core::Fold;
 use sled_core::{
     DEFAULT_SYSTEM_PROMPT, DialogConfig, StepOutcome, SystemConfig, WriteOptions,
     preview_model_input, read_dialog_config, run_until_stop_with_options, say_with_options,
@@ -108,10 +109,31 @@ enum Command {
     },
 }
 
-pub async fn run_cli() -> Result<()> {
+pub struct Profile {
+    pub fold: Box<dyn Fold>,
+    pub tools: ToolRegistry,
+    pub protocol_prompt: Option<String>,
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        Self {
+            fold: Box::new(AllFold),
+            tools: ToolRegistry::with_defaults(),
+            protocol_prompt: None,
+        }
+    }
+}
+
+pub async fn run_default_cli() -> Result<()> {
+    run_cli(Profile::default()).await
+}
+
+pub async fn run_cli(profile: Profile) -> Result<()> {
     dotenvy::dotenv().ok();
     init_logging();
     let cli = Cli::parse();
+    let base_system_prompt = profile_system_prompt(&profile);
 
     match cli.command {
         Command::Init {
@@ -148,7 +170,13 @@ pub async fn run_cli() -> Result<()> {
             let path = say_with_options(&dir, &text, WriteOptions { body_mirror })?;
             println!("wrote {}", path.display());
             if run {
-                run_dialog(&dir, run_options_from_resolved_config(config)?).await?;
+                run_dialog(
+                    &dir,
+                    &profile,
+                    &base_system_prompt,
+                    run_options_from_resolved_config(config)?,
+                )
+                .await?;
             }
         }
         Command::Config {
@@ -177,7 +205,7 @@ pub async fn run_cli() -> Result<()> {
             )?;
             let resolved = resolve_dialog_config(config.clone(), DialogOptionOverrides::default())?;
             validate_run_config(&resolved)?;
-            let _ = build_fold(&resolved)?;
+            let _ = build_fold_override(&resolved)?;
             write_dialog_config(&dir, &config)?;
             println!("wrote {}", dir.join("_config.json5").display());
         }
@@ -208,7 +236,13 @@ pub async fn run_cli() -> Result<()> {
             if !config_exists {
                 write_dialog_config(&dir, &dialog_config_from_resolved(&config))?;
             }
-            run_dialog(&dir, run_options_from_resolved_config(config)?).await?;
+            run_dialog(
+                &dir,
+                &profile,
+                &base_system_prompt,
+                run_options_from_resolved_config(config)?,
+            )
+            .await?;
         }
         Command::Status { dir } => {
             print!("{}", status_report(&dir)?);
@@ -216,9 +250,9 @@ pub async fn run_cli() -> Result<()> {
         Command::Context { dir } => {
             std::fs::create_dir_all(&dir)?;
             let config = read_or_create_dialog_config(&dir, DialogOptionOverrides::default())?;
-            let fold = build_fold(&config)?;
-            let (system, context) =
-                preview_model_input(&dir, DEFAULT_SYSTEM_PROMPT, fold.as_ref())?;
+            let fold_override = build_fold_override(&config)?;
+            let fold = selected_fold(&profile, fold_override.as_deref());
+            let (system, context) = preview_model_input(&dir, &base_system_prompt, fold)?;
             println!("=== system ===\n{}\n", system);
             println!("=== index ===\n{}", context.index);
             println!("=== bodies ===\n{}", context.bodies);
@@ -232,8 +266,8 @@ struct RunOptions {
     provider: Provider,
     model: Option<String>,
     openai_compatible_base_url: Option<String>,
-    fold: Box<dyn sled_core::Fold>,
     body_mirror: bool,
+    fold_override: Option<Box<dyn Fold>>,
 }
 
 #[derive(Clone, Debug)]
@@ -257,7 +291,12 @@ struct DialogOptionOverrides {
     body_mirror: Option<bool>,
 }
 
-async fn run_dialog(dir: &PathBuf, options: RunOptions) -> Result<()> {
+async fn run_dialog(
+    dir: &PathBuf,
+    profile: &Profile,
+    system_prompt: &str,
+    options: RunOptions,
+) -> Result<()> {
     let model = create_model_with_options(
         options.provider,
         ModelOptions {
@@ -265,13 +304,13 @@ async fn run_dialog(dir: &PathBuf, options: RunOptions) -> Result<()> {
             openai_compatible_base_url: options.openai_compatible_base_url,
         },
     )?;
-    let tools = ToolRegistry::with_defaults();
+    let fold = selected_fold(profile, options.fold_override.as_deref());
     match run_until_stop_with_options(
         dir,
         model.as_ref(),
-        &tools,
-        DEFAULT_SYSTEM_PROMPT,
-        options.fold.as_ref(),
+        &profile.tools,
+        system_prompt,
+        fold,
         WriteOptions {
             body_mirror: options.body_mirror,
         },
@@ -355,13 +394,13 @@ fn dialog_config_from_resolved(config: &ResolvedDialogConfig) -> DialogConfig {
 
 fn run_options_from_resolved_config(config: ResolvedDialogConfig) -> Result<RunOptions> {
     validate_run_config(&config)?;
-    let fold = build_fold(&config)?;
+    let fold_override = build_fold_override(&config)?;
     Ok(RunOptions {
         provider: config.provider,
         model: config.model,
         openai_compatible_base_url: config.openai_compatible_base_url,
-        fold,
         body_mirror: config.body_mirror,
+        fold_override,
     })
 }
 
@@ -446,14 +485,25 @@ fn apply_dialog_option_overrides(
     Ok(())
 }
 
-fn build_fold(config: &ResolvedDialogConfig) -> Result<Box<dyn sled_core::Fold>> {
+fn build_fold_override(config: &ResolvedDialogConfig) -> Result<Option<Box<dyn Fold>>> {
     match (config.recent_messages, config.recent_bytes) {
         (Some(_), Some(_)) => {
             anyhow::bail!("recent_messages and recent_bytes select different folds; use only one")
         }
-        (Some(k), None) => Ok(Box::new(RecentMessagesFold::new(k))),
-        (None, Some(budget)) => Ok(Box::new(RecentBytesFold::new(budget))),
-        (None, None) => Ok(Box::new(AllFold)),
+        (Some(k), None) => Ok(Some(Box::new(RecentMessagesFold::new(k)))),
+        (None, Some(budget)) => Ok(Some(Box::new(RecentBytesFold::new(budget)))),
+        (None, None) => Ok(None),
+    }
+}
+
+fn selected_fold<'a>(profile: &'a Profile, fold_override: Option<&'a dyn Fold>) -> &'a dyn Fold {
+    fold_override.unwrap_or(profile.fold.as_ref())
+}
+
+fn profile_system_prompt(profile: &Profile) -> String {
+    match profile.protocol_prompt.as_deref().map(str::trim) {
+        Some(prompt) if !prompt.is_empty() => format!("{DEFAULT_SYSTEM_PROMPT}\n\n{prompt}"),
+        _ => DEFAULT_SYSTEM_PROMPT.to_string(),
     }
 }
 
