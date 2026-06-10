@@ -27,11 +27,11 @@ Only one non-terminal file may exist at a time: `running`, `pending`, or `input`
 
 ### Guarantees
 
-- **One non-terminal file.** At most one non-terminal file may exist in a dialog: `running`, `pending`, or `input`. If the runner sees more than one, it exits with an error and touches nothing.
-- **Content first, then rename.** A message body or tool result is fully written before the file moves to its next status. A status change is a single atomic `rename`.
-- **Interrupted runs resume from the non-terminal file.** Restart `run` after a crash and the runner continues from the one non-terminal file. A filled `running` file is closed. A `pending` tool file with a result is closed. A `pending` tool file without a result is executed.
-- **Tool side effects must be idempotent.** If the process dies while a tool is executing, before any result was written, that tool can run again on the next `run`.
-- **Filled message identity is stable.** An empty open slot has only a number and status. Once content is written, the filename gets its role from the message body. After that, number and role do not change; only status changes.
+At most one non-terminal file may exist in a dialog. If the runner sees more than one, it exits with an error and touches nothing. A message body or tool result is fully written before the file moves to its next status; a status change is a single atomic `rename`.
+
+Restart `run` after a crash and the runner continues from the one non-terminal file. A filled `running` file is closed. A `pending` tool file with a result is closed. A `pending` tool file without a result is executed, so tools with side effects must be idempotent across crash recovery.
+
+An empty open slot has only a number and status. Once content is written, the filename gets its role from the message body. After that, number and role do not change; only status changes.
 
 ## Contents
 
