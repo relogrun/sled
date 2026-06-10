@@ -2,7 +2,7 @@
 
 File-based AI dialog runner.
 
-A dialog is a directory. Every message is a file.
+A dialog is a directory. Every message is a file. Status changes are atomic.
 
 Built for direct, hands-on work with models: a quiet workbench for unhurried research dialog where simplicity and observability matter. sled deliberately trades scale for legibility: no concurrent users, no parallel runs, no server. Keep the practical limits of that architecture in mind.
 
@@ -28,11 +28,11 @@ Only one non-terminal file may exist at a time: `running`, `pending`, or `needs-
 
 ### Guarantees
 
-At most one non-terminal file may exist in a dialog. If the runner sees more than one, it exits with an error and touches nothing. A message body or tool result is fully written before the file moves to its next status; a status change is a single atomic `rename`.
-
-Restart `run` after a crash and the runner continues from the one non-terminal file. A filled `running` file is closed. A `pending` tool file with a result is closed. A `pending` tool file with a suspension request becomes `tool.needs-input`. A `pending` tool file without either is executed, so tools with side effects must be idempotent across crash recovery.
-
-An empty `running` slot has only a number and status. A `needs-input` slot has a role because it names who needs the human input. Once content is written, number and role do not change; only status changes.
+- At most one non-terminal file may exist. If the runner sees more than one, it exits with an error and touches nothing.
+- Content is durably written before status changes. A status change is a single atomic `rename`.
+- A crash between write and rename is recoverable. The next `run` completes the visible old-status file.
+- A pending tool with no result or suspension may be executed again after a crash. Side-effectful tools must be idempotent.
+- Once content is written, slot number and role do not change. Only status changes.
 
 ## Contents
 
