@@ -6,6 +6,7 @@ use reqwest::{
 };
 use serde_json::{Value, json};
 use sled_core::{Call, Context, Model, Reply};
+use std::fmt;
 use std::io::{self, Write};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -217,15 +218,23 @@ impl Model for OpenAiModel {
         if let Some(temperature) = self.temperature {
             payload["temperature"] = json!(temperature);
         }
-        let response: Value = send_model_request_with_retry(self.provider, &self.model, || {
-            self.client
-                .post(&self.endpoint)
-                .bearer_auth(&self.api_key)
-                .json(&payload)
-        })
-        .await?
-        .json()
-        .await?;
+        let diagnostics = RequestDiagnostics::new(
+            serde_json::to_vec(&payload)?.len(),
+            system.len(),
+            context.index.len(),
+            context.bodies.len(),
+            "Bearer ".len() + self.api_key.len(),
+        );
+        let response: Value =
+            send_model_request_with_retry(self.provider, &self.model, diagnostics, || {
+                self.client
+                    .post(&self.endpoint)
+                    .bearer_auth(&self.api_key)
+                    .json(&payload)
+            })
+            .await?
+            .json()
+            .await?;
 
         info!(provider = %self.provider, model = %self.model, "received model response");
         let text = response["choices"][0]["message"]["content"]
@@ -274,8 +283,15 @@ impl Model for AnthropicModel {
         if let Some(temperature) = self.temperature {
             payload["temperature"] = json!(temperature);
         }
+        let diagnostics = RequestDiagnostics::new(
+            serde_json::to_vec(&payload)?.len(),
+            system.len(),
+            context.index.len(),
+            context.bodies.len(),
+            self.api_key.len() + "2023-06-01".len(),
+        );
         let response: Value =
-            send_model_request_with_retry(Provider::Anthropic, &self.model, || {
+            send_model_request_with_retry(Provider::Anthropic, &self.model, diagnostics, || {
                 self.client
                     .post("https://api.anthropic.com/v1/messages")
                     .header("x-api-key", &self.api_key)
@@ -297,6 +313,7 @@ impl Model for AnthropicModel {
 async fn send_model_request_with_retry(
     provider: Provider,
     model: &str,
+    diagnostics: RequestDiagnostics,
     build: impl Fn() -> RequestBuilder,
 ) -> Result<Response> {
     for attempt in 1..=MODEL_HTTP_MAX_ATTEMPTS {
@@ -318,13 +335,14 @@ async fn send_model_request_with_retry(
                         attempt,
                         max_attempts = MODEL_HTTP_MAX_ATTEMPTS,
                         delay_ms = delay.as_millis() as u64,
+                        request = %diagnostics,
                         "transient model HTTP status; retrying"
                     );
                     sleep(delay).await;
                     continue;
                 }
 
-                return Ok(response.error_for_status()?);
+                return Err(model_http_status_error(response, diagnostics).await);
             }
             Err(error) => {
                 if should_retry_error(&error) && attempt < MODEL_HTTP_MAX_ATTEMPTS {
@@ -336,18 +354,77 @@ async fn send_model_request_with_retry(
                         attempt,
                         max_attempts = MODEL_HTTP_MAX_ATTEMPTS,
                         delay_ms = delay.as_millis() as u64,
+                        request = %diagnostics,
                         "transient model request error; retrying"
                     );
                     sleep(delay).await;
                     continue;
                 }
 
-                return Err(error.into());
+                return Err(anyhow!("{error}; request diagnostics: {diagnostics}"));
             }
         }
     }
 
     unreachable!("retry loop always returns");
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RequestDiagnostics {
+    payload_bytes: usize,
+    system_bytes: usize,
+    index_bytes: usize,
+    bodies_bytes: usize,
+    auth_header_bytes: usize,
+}
+
+impl RequestDiagnostics {
+    fn new(
+        payload_bytes: usize,
+        system_bytes: usize,
+        index_bytes: usize,
+        bodies_bytes: usize,
+        auth_header_bytes: usize,
+    ) -> Self {
+        Self {
+            payload_bytes,
+            system_bytes,
+            index_bytes,
+            bodies_bytes,
+            auth_header_bytes,
+        }
+    }
+}
+
+impl fmt::Display for RequestDiagnostics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "payload_bytes={}, system_bytes={}, index_bytes={}, bodies_bytes={}, auth_header_bytes={}",
+            self.payload_bytes,
+            self.system_bytes,
+            self.index_bytes,
+            self.bodies_bytes,
+            self.auth_header_bytes
+        )
+    }
+}
+
+async fn model_http_status_error(
+    response: Response,
+    diagnostics: RequestDiagnostics,
+) -> anyhow::Error {
+    let status = response.status();
+    let url = response.url().to_string();
+    let body = response.text().await.unwrap_or_default();
+    let body = single_line_truncated(&body, 500);
+    if body.is_empty() {
+        anyhow!("HTTP status {status} for url ({url}); request diagnostics: {diagnostics}")
+    } else {
+        anyhow!(
+            "HTTP status {status} for url ({url}); response body: {body}; request diagnostics: {diagnostics}"
+        )
+    }
 }
 
 fn should_retry_status(status: StatusCode) -> bool {
@@ -383,6 +460,16 @@ fn retry_backoff(attempt: usize) -> Duration {
     let base_ms = 250_u64.saturating_mul(1_u64 << shift);
     let jitter_ms = 37_u64.saturating_mul(attempt as u64);
     Duration::from_millis(base_ms + jitter_ms)
+}
+
+fn single_line_truncated(value: &str, limit: usize) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(limit)
+        .collect()
 }
 
 fn parse_reply(text: &str) -> Result<Reply> {
@@ -509,6 +596,16 @@ mod tests {
         headers.insert(RETRY_AFTER, HeaderValue::from_static("2"));
 
         assert_eq!(retry_after(&headers), Some(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn request_diagnostics_are_size_only() {
+        let diagnostics = RequestDiagnostics::new(100, 20, 30, 40, 50);
+
+        assert_eq!(
+            diagnostics.to_string(),
+            "payload_bytes=100, system_bytes=20, index_bytes=30, bodies_bytes=40, auth_header_bytes=50"
+        );
     }
 
     #[test]
