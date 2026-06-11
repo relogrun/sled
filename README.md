@@ -4,7 +4,7 @@ A dialog is a directory. Every message is a file. Status changes are atomic.
 
 It is built for direct, hands-on work with models when you want to inspect, edit, or replay a research dialog, run model work from scripts or CI, or see the exact context sent to the model.
 
-`sled` is intentionally simple: one user, no parallel runs, no server. The filenames show whose turn it is and what is in flight. 
+`sled` is intentionally simple: one user, no parallel runs, no server. The filenames show whose turn it is and what is in flight.
 
 `ls` shows the whole run, and a text editor lets you inspect, repair, or replay any step. There is nothing else: no database, no separate state file, no in-memory state that survives the process.
 
@@ -19,7 +19,13 @@ Each filled message is a JSON5 file named by slot, role, and status:
 
 An open model turn is roleless: `0002.running.json5`. Once content is written, the role never changes.
 
-Only one non-terminal file may exist at a time: `running`, `pending`, or `needs-input`.
+### Guarantees
+
+- At most one non-terminal file may exist: `running`, `pending`, or `needs-input`. If the runner sees more than one, it exits with an error and touches nothing.
+- Content is durably written before status changes. A status change is a single atomic `rename`.
+- A crash between write and rename is recoverable. The next `run` completes the visible old-status file.
+- A pending tool with no result or suspension may be executed again after a crash. Side-effectful tools must be idempotent.
+- Once content is written, slot number and role do not change. Only status changes.
 
 The status names who must act:
 
@@ -28,29 +34,17 @@ The status names who must act:
 - `needs-input` — you must reply, either to the dialog or to a suspended tool
 - `done` — closed
 
-### Guarantees
-
-- At most one non-terminal file may exist. If the runner sees more than one, it exits with an error and touches nothing.
-- Content is durably written before status changes. A status change is a single atomic `rename`.
-- A crash between write and rename is recoverable. The next `run` completes the visible old-status file.
-- A pending tool with no result or suspension may be executed again after a crash. Side-effectful tools must be idempotent.
-- Once content is written, slot number and role do not change. Only status changes.
-
 ## Contents
-- [sled - file-based AI dialog runner](#sled---file-based-ai-dialog-runner)
-    - [Guarantees](#guarantees)
-  - [Contents](#contents)
-  - [Quick Start](#quick-start)
-  - [Commands](#commands)
-  - [Config](#config)
-  - [Dialog Config](#dialog-config)
-  - [System Prompt](#system-prompt)
-  - [Tools](#tools)
-  - [Workspace](#workspace)
-  - [Logging](#logging)
-  - [Customization](#customization)
-    - [Adding a Tool](#adding-a-tool)
-    - [Adding a Fold](#adding-a-fold)
+
+- [Quick Start](#quick-start)
+- [Commands](#commands)
+- [Config](#config)
+- [Dialog Config](#dialog-config)
+- [System Prompt](#system-prompt)
+- [Tools](#tools)
+- [Workspace](#workspace)
+- [Logging](#logging)
+- [Customization](#customization)
 
 ## Quick Start
 
