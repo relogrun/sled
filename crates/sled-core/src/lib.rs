@@ -402,8 +402,9 @@ pub fn read_system_config(dir: &Path) -> Result<SystemConfig> {
 }
 
 pub fn write_default_system_config(dir: &Path) -> Result<()> {
-    let path = dir.join("_system.json5");
-    if path.exists() {
+    let json5_path = dir.join("_system.json5");
+    let json_path = dir.join("_system.json");
+    if json5_path.exists() || json_path.exists() {
         return Ok(());
     }
     write_system_config(dir, &SystemConfig::default())
@@ -959,6 +960,18 @@ mod tests {
         assert!(text.starts_with("// Dialog-specific system prompt fragment."));
         assert!(text.contains("sled always prepends its internal protocol prompt"));
         assert_eq!(read_system_config(&dir).unwrap().prompt, "Dialog prompt.");
+    }
+
+    #[test]
+    fn default_system_config_does_not_shadow_existing_json_file() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("_system.json"), r#"{"prompt":"Legacy prompt."}"#).unwrap();
+
+        write_default_system_config(&dir).unwrap();
+
+        assert!(!dir.join("_system.json5").exists());
+        assert_eq!(read_system_config(&dir).unwrap().prompt, "Legacy prompt.");
     }
 
     #[test]
