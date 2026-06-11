@@ -164,6 +164,8 @@ Secrets stay in env. Runtime options are resolved in this order:
 
 Use env only for secrets: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `SLED_OPENAI_COMPAT_API_KEY`. Put non-secret runtime settings in `_config.json5` or pass them as command-line arguments.
 
+Model HTTP requests are retried conservatively for transient transport failures and statuses such as `429`, `502`, `503`, and `504`. Request-shape errors such as `400`, `413`, or `431` are not retried.
+
 ## Dialog Config
 
 Each dialog may have `_config.json5` for local, non-secret runtime overrides. The file may be partial, and missing keys use built-in defaults. Command-line arguments override it for the current command and are not written back. `config <dir>` creates or updates the file explicitly. If the file is absent, `say`, `run`, and `context` use defaults without creating it.

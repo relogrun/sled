@@ -1,10 +1,17 @@
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
-use reqwest::Client;
+use reqwest::{
+    Client, RequestBuilder, Response, StatusCode,
+    header::{HeaderMap, RETRY_AFTER},
+};
 use serde_json::{Value, json};
 use sled_core::{Call, Context, Model, Reply};
 use std::io::{self, Write};
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing::{debug, info, warn};
+
+const MODEL_HTTP_MAX_ATTEMPTS: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
@@ -210,16 +217,15 @@ impl Model for OpenAiModel {
         if let Some(temperature) = self.temperature {
             payload["temperature"] = json!(temperature);
         }
-        let response: Value = self
-            .client
-            .post(&self.endpoint)
-            .bearer_auth(&self.api_key)
-            .json(&payload)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+        let response: Value = send_model_request_with_retry(self.provider, &self.model, || {
+            self.client
+                .post(&self.endpoint)
+                .bearer_auth(&self.api_key)
+                .json(&payload)
+        })
+        .await?
+        .json()
+        .await?;
 
         info!(provider = %self.provider, model = %self.model, "received model response");
         let text = response["choices"][0]["message"]["content"]
@@ -268,15 +274,15 @@ impl Model for AnthropicModel {
         if let Some(temperature) = self.temperature {
             payload["temperature"] = json!(temperature);
         }
-        let response: Value = self
-            .client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&payload)
-            .send()
+        let response: Value =
+            send_model_request_with_retry(Provider::Anthropic, &self.model, || {
+                self.client
+                    .post("https://api.anthropic.com/v1/messages")
+                    .header("x-api-key", &self.api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .json(&payload)
+            })
             .await?
-            .error_for_status()?
             .json()
             .await?;
 
@@ -286,6 +292,97 @@ impl Model for AnthropicModel {
             .ok_or_else(|| anyhow!("empty Anthropic response: {response}"))?;
         parse_reply(text)
     }
+}
+
+async fn send_model_request_with_retry(
+    provider: Provider,
+    model: &str,
+    build: impl Fn() -> RequestBuilder,
+) -> Result<Response> {
+    for attempt in 1..=MODEL_HTTP_MAX_ATTEMPTS {
+        match build().send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    return Ok(response);
+                }
+
+                if should_retry_status(status) && attempt < MODEL_HTTP_MAX_ATTEMPTS {
+                    let delay = retry_after(response.headers())
+                        .unwrap_or_else(|| retry_backoff(attempt))
+                        .min(Duration::from_secs(10));
+                    warn!(
+                        provider = %provider,
+                        model = %model,
+                        status = status.as_u16(),
+                        attempt,
+                        max_attempts = MODEL_HTTP_MAX_ATTEMPTS,
+                        delay_ms = delay.as_millis() as u64,
+                        "transient model HTTP status; retrying"
+                    );
+                    sleep(delay).await;
+                    continue;
+                }
+
+                return Ok(response.error_for_status()?);
+            }
+            Err(error) => {
+                if should_retry_error(&error) && attempt < MODEL_HTTP_MAX_ATTEMPTS {
+                    let delay = retry_backoff(attempt);
+                    warn!(
+                        provider = %provider,
+                        model = %model,
+                        error = %error,
+                        attempt,
+                        max_attempts = MODEL_HTTP_MAX_ATTEMPTS,
+                        delay_ms = delay.as_millis() as u64,
+                        "transient model request error; retrying"
+                    );
+                    sleep(delay).await;
+                    continue;
+                }
+
+                return Err(error.into());
+            }
+        }
+    }
+
+    unreachable!("retry loop always returns");
+}
+
+fn should_retry_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::CONFLICT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
+fn should_retry_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
+}
+
+fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+    let seconds = headers
+        .get(RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some(Duration::from_secs(seconds))
+}
+
+fn retry_backoff(attempt: usize) -> Duration {
+    let shift = attempt.saturating_sub(1).min(4) as u32;
+    let base_ms = 250_u64.saturating_mul(1_u64 << shift);
+    let jitter_ms = 37_u64.saturating_mul(attempt as u64);
+    Duration::from_millis(base_ms + jitter_ms)
 }
 
 fn parse_reply(text: &str) -> Result<Reply> {
@@ -369,6 +466,7 @@ fn shorten(text: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::header::HeaderValue;
 
     #[test]
     fn parses_openai_compatible_provider() {
@@ -391,6 +489,26 @@ mod tests {
             chat_completions_endpoint("https://example.com/v1/chat/completions"),
             "https://example.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn retries_only_transient_statuses() {
+        assert!(should_retry_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(should_retry_status(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(should_retry_status(StatusCode::GATEWAY_TIMEOUT));
+        assert!(!should_retry_status(StatusCode::BAD_REQUEST));
+        assert!(!should_retry_status(StatusCode::UNAUTHORIZED));
+        assert!(!should_retry_status(
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
+        ));
+    }
+
+    #[test]
+    fn parses_retry_after_seconds() {
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("2"));
+
+        assert_eq!(retry_after(&headers), Some(Duration::from_secs(2)));
     }
 
     #[test]
