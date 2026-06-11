@@ -296,13 +296,8 @@ fn parse_reply(text: &str) -> Result<Reply> {
         .trim_start_matches("```")
         .trim_end_matches("```")
         .trim();
-    let value: Value = match serde_json::from_str(clean) {
-        Ok(value) => value,
-        Err(err) => {
-            warn!(error = %err, response_bytes = text.len(), "model returned non-JSON");
-            return Err(err).with_context(|| format!("model returned non-JSON: {text}"));
-        }
-    };
+    let value =
+        parse_json_response(clean).with_context(|| format!("model returned non-JSON: {text}"))?;
 
     match value["type"].as_str() {
         Some("final") => Ok(Reply::Final {
@@ -318,6 +313,29 @@ fn parse_reply(text: &str) -> Result<Reply> {
             summary: value["summary"].as_str().unwrap_or_default().into(),
         }),
         _ => bail!("unknown model response type: {clean}"),
+    }
+}
+
+fn parse_json_response(clean: &str) -> Result<Value> {
+    let mut values = Vec::new();
+    let stream = serde_json::Deserializer::from_str(clean).into_iter::<Value>();
+    for value in stream {
+        match value {
+            Ok(value) => values.push(value),
+            Err(err) => {
+                warn!(error = %err, response_bytes = clean.len(), "model returned non-JSON");
+                return Err(err.into());
+            }
+        }
+    }
+
+    let Some(first) = values.first().cloned() else {
+        bail!("empty model response");
+    };
+    if values.iter().all(|value| value == &first) {
+        Ok(first)
+    } else {
+        bail!("model returned multiple different JSON replies");
     }
 }
 
@@ -355,6 +373,30 @@ mod tests {
             chat_completions_endpoint("https://example.com/v1/chat/completions"),
             "https://example.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn parses_repeated_identical_json_reply() {
+        let text = r#"{"type":"tool","tool":"probe","args":{"x":14},"summary":"probe f(14)"}
+{"type":"tool","tool":"probe","args":{"x":14},"summary":"probe f(14)"}"#;
+
+        match parse_reply(text).unwrap() {
+            Reply::Tool { call, summary } => {
+                assert_eq!(call.tool, "probe");
+                assert_eq!(call.args["x"], 14);
+                assert_eq!(summary, "probe f(14)");
+            }
+            other => panic!("expected tool reply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_multiple_different_json_replies() {
+        let text = r#"{"type":"tool","tool":"probe","args":{"x":14},"summary":"probe f(14)"}
+{"type":"tool","tool":"probe","args":{"x":15},"summary":"probe f(15)"}"#;
+
+        let err = parse_reply(text).unwrap_err().to_string();
+        assert!(err.contains("model returned non-JSON"));
     }
 
     fn model_error(options: ModelOptions) -> String {
