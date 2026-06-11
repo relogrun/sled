@@ -416,6 +416,15 @@ pub fn write_system_config(dir: &Path, config: &SystemConfig) -> Result<()> {
     Ok(())
 }
 
+pub fn write_system_prompt(dir: &Path, prompt: impl Into<String>) -> Result<()> {
+    write_system_config(
+        dir,
+        &SystemConfig {
+            prompt: prompt.into(),
+        },
+    )
+}
+
 fn system_config_json5(config: &SystemConfig) -> Result<String> {
     Ok(format!(
         "// Dialog-specific system prompt fragment.\n\
@@ -948,13 +957,7 @@ mod tests {
     fn system_config_writer_includes_fragment_comment() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
-        write_system_config(
-            &dir,
-            &SystemConfig {
-                prompt: "Dialog prompt.".into(),
-            },
-        )
-        .unwrap();
+        write_system_prompt(&dir, "Dialog prompt.").unwrap();
 
         let text = fs::read_to_string(dir.join("_system.json5")).unwrap();
         assert!(text.starts_with("// Dialog-specific system prompt fragment."));

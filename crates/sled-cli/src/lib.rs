@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 use sled_ai::{ModelOptions, Provider, create_model_with_options, default_model};
 use sled_core::Fold;
 use sled_core::{
-    StepOutcome, SystemConfig, WriteOptions, durable_write, preview_model_input,
-    run_until_stop_with_options, say_with_options, status_report, write_default_system_config,
-    write_system_config,
+    StepOutcome, WriteOptions, durable_write, preview_model_input, run_until_stop_with_options,
+    say_with_options, status_report, write_default_system_config, write_system_prompt,
 };
 use sled_fold::{AllFold, RecentBytesFold, RecentMessagesFold};
 use sled_tools::ToolRegistry;
@@ -168,7 +167,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
         } => {
             std::fs::create_dir_all(&dir)?;
             if let Some(prompt) = system_prompt(system, system_file)? {
-                write_system_config(&dir, &SystemConfig { prompt })?;
+                write_system_prompt(&dir, prompt)?;
             } else {
                 write_default_system_config(&dir)?;
             }
