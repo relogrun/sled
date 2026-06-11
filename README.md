@@ -12,6 +12,7 @@ Each filled message is a JSON5 file named by slot, role, and status:
 
 ```text
 0001.user.done.json5
+0002.assistant.done.json5
 0003.tool.pending.json5
 0004.tool.needs-input.json5
 ```
