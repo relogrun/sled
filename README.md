@@ -12,12 +12,9 @@ Each filled message is a JSON5 file named by slot, role, and status:
 
 ```text
 0001.user.done.json5
-0002.running.json5
 0003.tool.pending.json5
 0004.tool.needs-input.json5
 ```
-
-An open model turn is roleless: `0002.running.json5`. Once content is written, the role never changes.
 
 ### Guarantees
 
@@ -27,16 +24,10 @@ An open model turn is roleless: `0002.running.json5`. Once content is written, t
 - A pending tool with no result or suspension may be executed again after a crash. Side-effectful tools must be idempotent.
 - Once content is written, slot number and role do not change. Only status changes.
 
-The status names who must act:
-
-- `running` — the model is taking its turn
-- `pending` — the runner must finish a tool call
-- `needs-input` — you must reply, either to the dialog or to a suspended tool
-- `done` — closed
-
 ## Contents
 
 - [Quick Start](#quick-start)
+- [File Roles and Statuses](#file-roles-and-statuses)
 - [Commands](#commands)
 - [Config](#config)
 - [Dialog Config](#dialog-config)
@@ -83,6 +74,23 @@ Inspect the exact context sent to the model:
 ```bash
 cargo run -p sled-cli -- context ./dialog
 ```
+
+## File Roles and Statuses
+
+An open model turn is roleless:
+
+```text
+0002.running.json5
+```
+
+Once content is written, the role never changes.
+
+The status names who must act:
+
+- `running` — the model is taking its turn
+- `pending` — the runner must finish a tool call
+- `needs-input` — you must reply, either to the dialog or to a suspended tool
+- `done` — closed
 
 ## Commands
 
