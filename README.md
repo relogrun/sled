@@ -76,6 +76,19 @@ Inspect the exact context sent to the model:
 cargo run -p sled-cli -- context ./dialog
 ```
 
+When a run stops at `needs-input`, answer with `say` and continue with `run`:
+
+```bash
+cargo run -p sled-cli -- say ./dialog "Use option A."
+cargo run -p sled-cli -- run ./dialog
+```
+
+Or do both in one command:
+
+```bash
+cargo run -p sled-cli -- say ./dialog "Use option A." --run
+```
+
 ## File Roles and Statuses
 
 Open slots and filled messages use these filename shapes:
