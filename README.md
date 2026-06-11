@@ -2,7 +2,7 @@
 
 A dialog is a directory. Every message is a file. Status changes are atomic.
 
-sled is intentionally simple: one user, no parallel runs, no server. It is built for direct, hands-on work with models when you want to inspect, edit, or replay a research dialog, run model work from scripts or CI, or see the exact context sent to the model.
+`sled` is intentionally simple: one user, no parallel runs, no server. It is built for direct, hands-on work with models when you want to inspect, edit, or replay a research dialog, run model work from scripts or CI, or see the exact context sent to the model.
 
 The filenames show whose turn it is and what is in flight. Tools can automate work while still leaving a clear human handoff through `needs-input`. `ls` shows the whole run, and a text editor lets you inspect, repair, or replay any step. There is nothing else: no database, no separate state file, no in-memory state that survives the process.
 
