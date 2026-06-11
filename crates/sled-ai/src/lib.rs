@@ -51,6 +51,7 @@ pub fn default_model(provider: Provider) -> Option<&'static str> {
 pub struct ModelOptions {
     pub model: Option<String>,
     pub openai_compatible_base_url: Option<String>,
+    pub temperature: Option<f32>,
 }
 
 pub fn create_model_with_options(
@@ -76,6 +77,7 @@ pub fn create_model_with_options(
                 model,
                 endpoint: "https://api.openai.com/v1/chat/completions".into(),
                 provider,
+                temperature: options.temperature,
             }))
         }
         Provider::OpenAiCompatible => {
@@ -97,6 +99,7 @@ pub fn create_model_with_options(
                 model,
                 endpoint,
                 provider,
+                temperature: options.temperature,
             }))
         }
         Provider::Anthropic => {
@@ -112,6 +115,7 @@ pub fn create_model_with_options(
                 client: Client::new(),
                 api_key,
                 model,
+                temperature: options.temperature,
             }))
         }
     }
@@ -179,6 +183,7 @@ pub struct OpenAiModel {
     model: String,
     endpoint: String,
     provider: Provider,
+    temperature: Option<f32>,
 }
 
 #[async_trait]
@@ -195,17 +200,21 @@ impl Model for OpenAiModel {
             "Dialog index:\n{}\n\nOpened bodies:\n{}",
             context.index, context.bodies
         );
+        let mut payload = json!({
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user}
+            ]
+        });
+        if let Some(temperature) = self.temperature {
+            payload["temperature"] = json!(temperature);
+        }
         let response: Value = self
             .client
             .post(&self.endpoint)
             .bearer_auth(&self.api_key)
-            .json(&json!({
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user}
-                ]
-            }))
+            .json(&payload)
             .send()
             .await?
             .error_for_status()?
@@ -233,6 +242,7 @@ pub struct AnthropicModel {
     client: Client,
     api_key: String,
     model: String,
+    temperature: Option<f32>,
 }
 
 #[async_trait]
@@ -249,17 +259,21 @@ impl Model for AnthropicModel {
             "Dialog index:\n{}\n\nOpened bodies:\n{}",
             context.index, context.bodies
         );
+        let mut payload = json!({
+            "model": self.model,
+            "max_tokens": 4096,
+            "system": system,
+            "messages": [{"role": "user", "content": user}]
+        });
+        if let Some(temperature) = self.temperature {
+            payload["temperature"] = json!(temperature);
+        }
         let response: Value = self
             .client
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
-            .json(&json!({
-                "model": self.model,
-                "max_tokens": 4096,
-                "system": system,
-                "messages": [{"role": "user", "content": user}]
-            }))
+            .json(&payload)
             .send()
             .await?
             .error_for_status()?
@@ -370,6 +384,7 @@ mod tests {
         let blank_model = model_error(ModelOptions {
             model: Some(" ".into()),
             openai_compatible_base_url: Some("https://example.com/v1".into()),
+            ..ModelOptions::default()
         });
         assert_eq!(
             blank_model,

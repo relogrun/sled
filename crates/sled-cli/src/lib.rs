@@ -320,6 +320,7 @@ async fn run_dialog(
         ModelOptions {
             model: options.model,
             openai_compatible_base_url: options.openai_compatible_base_url,
+            temperature: None,
         },
     )?;
     let fold = selected_fold(profile, options.fold_override.as_deref());
