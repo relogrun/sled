@@ -1,4 +1,4 @@
-# sled: File-based AI dialog runner
+# sled - file-based AI dialog runner
 
 A dialog is a directory. Every message is a file. Status changes are atomic.
 
