@@ -78,13 +78,19 @@ cargo run -p sled-cli -- context ./dialog
 
 ## File Roles and Statuses
 
-An open model turn is roleless:
+Open slots and filled messages use these filename shapes:
 
 ```text
-0002.running.json5
+0002.running.json5              # model turn, role not known yet
+0001.user.done.json5            # user message
+0002.assistant.done.json5       # assistant message
+0003.tool.pending.json5         # tool call waiting for the runner
+0003.tool.done.json5            # completed tool call
+0004.user.needs-input.json5     # dialog waits for the next user message
+0004.tool.needs-input.json5     # suspended tool waits for a human answer
 ```
 
-Once content is written, the role never changes.
+An open model turn is roleless because the model may write either an assistant message or a tool call. Once content is written, the role never changes.
 
 The status names who must act:
 
