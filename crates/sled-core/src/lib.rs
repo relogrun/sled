@@ -120,12 +120,6 @@ pub struct WriteOptions {
     pub body_mirror: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct StepOptions {
-    pub protocol_prompt: Option<String>,
-    pub write_options: WriteOptions,
-}
-
 #[derive(Clone, Debug)]
 pub enum Reply {
     Final {
@@ -441,11 +435,7 @@ pub fn validate_single_open(slots: &[Slot]) -> Result<Option<&Slot>> {
     Ok(open.first().copied())
 }
 
-pub fn preview_model_input(
-    dir: &Path,
-    fold: &dyn Fold,
-    options: &StepOptions,
-) -> Result<(String, Context)> {
+pub fn preview_model_input(dir: &Path, fold: &dyn Fold) -> Result<(String, Context)> {
     let system_config = read_system_config(dir)?;
     let mut slots = scan(dir)?;
     validate_single_open(&slots)?;
@@ -466,7 +456,7 @@ pub fn preview_model_input(
     }
 
     Ok((
-        resolve_system_prompt(options.protocol_prompt.as_deref(), &system_config),
+        resolve_system_prompt(&system_config),
         fold.assemble(&slots)?,
     ))
 }
@@ -512,7 +502,7 @@ pub async fn step(
     tools: &dyn ToolExecutor,
     fold: &dyn Fold,
 ) -> Result<StepOutcome> {
-    step_with_options(dir, model, tools, fold, StepOptions::default()).await
+    step_with_options(dir, model, tools, fold, WriteOptions::default()).await
 }
 
 pub async fn step_with_options(
@@ -520,12 +510,11 @@ pub async fn step_with_options(
     model: &dyn Model,
     tools: &dyn ToolExecutor,
     fold: &dyn Fold,
-    options: StepOptions,
+    write_options: WriteOptions,
 ) -> Result<StepOutcome> {
     debug!(dir = %dir.display(), "runner step start");
     fs::create_dir_all(dir)?;
     let system_config = read_system_config(dir)?;
-    let write_options = options.write_options;
     let slots = scan(dir)?;
     let open = validate_single_open(&slots)?;
 
@@ -624,7 +613,7 @@ pub async fn step_with_options(
             }
 
             let context = fold.assemble(&slots)?;
-            let system = resolve_system_prompt(options.protocol_prompt.as_deref(), &system_config);
+            let system = resolve_system_prompt(&system_config);
             match model.complete(&system, &context).await? {
                 Reply::Final {
                     text,
@@ -684,7 +673,7 @@ pub async fn run_until_stop(
     tools: &dyn ToolExecutor,
     fold: &dyn Fold,
 ) -> Result<StepOutcome> {
-    run_until_stop_with_options(dir, model, tools, fold, StepOptions::default()).await
+    run_until_stop_with_options(dir, model, tools, fold, WriteOptions::default()).await
 }
 
 pub async fn run_until_stop_with_options(
@@ -692,11 +681,11 @@ pub async fn run_until_stop_with_options(
     model: &dyn Model,
     tools: &dyn ToolExecutor,
     fold: &dyn Fold,
-    options: StepOptions,
+    write_options: WriteOptions,
 ) -> Result<StepOutcome> {
     info!(dir = %dir.display(), "runner started");
     loop {
-        match step_with_options(dir, model, tools, fold, options.clone()).await? {
+        match step_with_options(dir, model, tools, fold, write_options).await? {
             StepOutcome::Continue => continue,
             other => return Ok(other),
         }
@@ -811,13 +800,8 @@ pub fn status_report(dir: &Path) -> Result<String> {
     Ok(report)
 }
 
-fn resolve_system_prompt(protocol_prompt: Option<&str>, config: &SystemConfig) -> String {
+fn resolve_system_prompt(config: &SystemConfig) -> String {
     let mut parts = vec![DEFAULT_SYSTEM_PROMPT.to_string()];
-    if let Some(prompt) = protocol_prompt.map(str::trim)
-        && !prompt.is_empty()
-    {
-        parts.push(prompt.to_string());
-    }
     if !config.prompt.trim().is_empty() {
         parts.push(config.prompt.trim().to_string());
     }
@@ -941,16 +925,13 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_is_internal_prompt_plus_fragments() {
-        let system = resolve_system_prompt(
-            Some("Profile protocol."),
-            &SystemConfig {
-                prompt: "Dialog prompt.".into(),
-            },
-        );
+    fn system_prompt_is_internal_prompt_plus_system_config() {
+        let system = resolve_system_prompt(&SystemConfig {
+            prompt: "Dialog prompt.".into(),
+        });
 
         assert!(system.starts_with(DEFAULT_SYSTEM_PROMPT));
-        assert!(system.contains("\n\nProfile protocol.\n\nDialog prompt."));
+        assert!(system.ends_with("\n\nDialog prompt."));
     }
 
     #[test]

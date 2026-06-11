@@ -28,9 +28,6 @@ async fn main() -> anyhow::Result<()> {
     run_cli(Profile {
         fold: Box::new(AllFold),
         tools,
-        protocol_prompt: Some(
-            "The custom `echo` tool returns its JSON arguments unchanged.".into(),
-        ),
     })
     .await
 }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sled_ai::{ModelOptions, Provider, create_model_with_options, default_model};
 use sled_core::Fold;
 use sled_core::{
-    StepOptions, StepOutcome, SystemConfig, WriteOptions, durable_write, preview_model_input,
+    StepOutcome, SystemConfig, WriteOptions, durable_write, preview_model_input,
     run_until_stop_with_options, say_with_options, status_report, write_default_system_config,
     write_system_config,
 };
@@ -108,7 +108,6 @@ enum Command {
 pub struct Profile {
     pub fold: Box<dyn Fold>,
     pub tools: ToolRegistry,
-    pub protocol_prompt: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,7 +147,6 @@ impl Default for Profile {
         Self {
             fold: Box::new(AllFold),
             tools: ToolRegistry::with_defaults(),
-            protocol_prompt: None,
         }
     }
 }
@@ -257,8 +255,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             let (config, _) = read_resolved_dialog_config(&dir, DialogOptionOverrides::default())?;
             let fold_override = build_fold_override(&config)?;
             let fold = selected_fold(&profile, fold_override.as_deref());
-            let (system, context) =
-                preview_model_input(&dir, fold, &step_options(&profile, false))?;
+            let (system, context) = preview_model_input(&dir, fold)?;
             println!("=== system ===\n{}\n", system);
             println!("=== index ===\n{}", context.index);
             println!("=== bodies ===\n{}", context.bodies);
@@ -312,7 +309,9 @@ async fn run_dialog(dir: &Path, profile: &Profile, options: RunOptions) -> Resul
         model.as_ref(),
         &profile.tools,
         fold,
-        step_options(profile, options.body_mirror),
+        WriteOptions {
+            body_mirror: options.body_mirror,
+        },
     )
     .await?
     {
@@ -518,13 +517,6 @@ fn selected_fold<'a>(profile: &'a Profile, fold_override: Option<&'a dyn Fold>) 
     fold_override.unwrap_or(profile.fold.as_ref())
 }
 
-fn step_options(profile: &Profile, body_mirror: bool) -> StepOptions {
-    StepOptions {
-        protocol_prompt: profile.protocol_prompt.clone(),
-        write_options: WriteOptions { body_mirror },
-    }
-}
-
 fn body_mirror_override(body_mirror: bool) -> Option<bool> {
     if body_mirror { Some(true) } else { None }
 }
@@ -666,20 +658,5 @@ mod tests {
             Some("claude-test")
         );
         assert!(config.openai.is_none());
-    }
-
-    #[test]
-    fn step_options_carry_profile_protocol_prompt() {
-        let profile = Profile {
-            protocol_prompt: Some("Custom protocol text.".into()),
-            ..Profile::default()
-        };
-
-        let options = step_options(&profile, true);
-        assert_eq!(
-            options.protocol_prompt.as_deref(),
-            Some("Custom protocol text.")
-        );
-        assert!(options.write_options.body_mirror);
     }
 }
