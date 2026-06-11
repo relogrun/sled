@@ -411,8 +411,17 @@ pub fn write_default_system_config(dir: &Path) -> Result<()> {
 
 pub fn write_system_config(dir: &Path, config: &SystemConfig) -> Result<()> {
     let path = dir.join("_system.json5");
-    durable_write(&path, serde_json::to_string_pretty(&config)?.as_bytes())?;
+    durable_write(&path, system_config_json5(config)?.as_bytes())?;
     Ok(())
+}
+
+fn system_config_json5(config: &SystemConfig) -> Result<String> {
+    Ok(format!(
+        "// Dialog-specific system prompt fragment.\n\
+         // sled always prepends its internal protocol prompt before this fragment.\n\
+         {}\n",
+        serde_json::to_string_pretty(config)?
+    ))
 }
 
 pub fn validate_single_open(slots: &[Slot]) -> Result<Option<&Slot>> {
@@ -932,6 +941,24 @@ mod tests {
 
         assert!(system.starts_with(DEFAULT_SYSTEM_PROMPT));
         assert!(system.ends_with("\n\nDialog prompt."));
+    }
+
+    #[test]
+    fn system_config_writer_includes_fragment_comment() {
+        let dir = temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        write_system_config(
+            &dir,
+            &SystemConfig {
+                prompt: "Dialog prompt.".into(),
+            },
+        )
+        .unwrap();
+
+        let text = fs::read_to_string(dir.join("_system.json5")).unwrap();
+        assert!(text.starts_with("// Dialog-specific system prompt fragment."));
+        assert!(text.contains("sled always prepends its internal protocol prompt"));
+        assert_eq!(read_system_config(&dir).unwrap().prompt, "Dialog prompt.");
     }
 
     #[test]
