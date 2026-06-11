@@ -290,12 +290,7 @@ impl Model for AnthropicModel {
 
 fn parse_reply(text: &str) -> Result<Reply> {
     debug!(response_bytes = text.len(), "parsing model response");
-    let clean = text
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+    let clean = text.trim();
     let value =
         parse_json_response(clean).with_context(|| format!("model returned non-JSON: {text}"))?;
 
@@ -317,17 +312,7 @@ fn parse_reply(text: &str) -> Result<Reply> {
 }
 
 fn parse_json_response(clean: &str) -> Result<Value> {
-    let mut values = Vec::new();
-    let stream = serde_json::Deserializer::from_str(clean).into_iter::<Value>();
-    for value in stream {
-        match value {
-            Ok(value) => values.push(value),
-            Err(err) => {
-                warn!(error = %err, response_bytes = clean.len(), "model returned non-JSON");
-                return Err(err.into());
-            }
-        }
-    }
+    let values = extract_json_objects(clean)?;
 
     let Some(first) = values.first().cloned() else {
         bail!("empty model response");
@@ -337,6 +322,39 @@ fn parse_json_response(clean: &str) -> Result<Value> {
     } else {
         bail!("model returned multiple different JSON replies");
     }
+}
+
+fn extract_json_objects(text: &str) -> Result<Vec<Value>> {
+    let mut values = Vec::new();
+    let mut index = 0;
+
+    while let Some(relative_start) = text[index..].find('{') {
+        let start = index + relative_start;
+        let slice = &text[start..];
+        let mut stream = serde_json::Deserializer::from_str(slice).into_iter::<Value>();
+        match stream.next() {
+            Some(Ok(value)) if value.is_object() => {
+                let end = start + stream.byte_offset();
+                values.push(value);
+                index = end.max(start + 1);
+            }
+            Some(Ok(_)) => {
+                index = start + 1;
+            }
+            Some(Err(err)) => {
+                debug!(error = %err, byte = start, "skipping invalid JSON candidate");
+                index = start + 1;
+            }
+            None => {
+                index = start + 1;
+            }
+        }
+    }
+
+    if values.is_empty() {
+        warn!(response_bytes = text.len(), "model returned no JSON object");
+    }
+    Ok(values)
 }
 
 fn shorten(text: &str, limit: usize) -> String {
@@ -391,12 +409,53 @@ mod tests {
     }
 
     #[test]
+    fn parses_single_json_reply_in_markdown_fence() {
+        let text = r#"```json
+{"type":"tool","tool":"probe","args":{"x":14},"summary":"probe f(14)"}
+```"#;
+
+        match parse_reply(text).unwrap() {
+            Reply::Tool { call, summary } => {
+                assert_eq!(call.tool, "probe");
+                assert_eq!(call.args["x"], 14);
+                assert_eq!(summary, "probe f(14)");
+            }
+            other => panic!("expected tool reply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_single_json_reply_with_surrounding_text() {
+        let text = r#"Here is the tool call:
+{"type":"tool","tool":"probe","args":{"x":14},"summary":"probe f(14)"}
+I will wait for the result."#;
+
+        match parse_reply(text).unwrap() {
+            Reply::Tool { call, summary } => {
+                assert_eq!(call.tool, "probe");
+                assert_eq!(call.args["x"], 14);
+                assert_eq!(summary, "probe f(14)");
+            }
+            other => panic!("expected tool reply, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn rejects_multiple_different_json_replies() {
         let text = r#"{"type":"tool","tool":"probe","args":{"x":14},"summary":"probe f(14)"}
 {"type":"tool","tool":"probe","args":{"x":15},"summary":"probe f(15)"}"#;
 
         let err = parse_reply(text).unwrap_err().to_string();
         assert!(err.contains("model returned non-JSON"));
+    }
+
+    #[test]
+    fn rejects_tool_call_plus_final_reply() {
+        let text = r#"{"type":"tool","tool":"probe","args":{"x":14},"summary":"probe f(14)"}
+{"type":"final","text":"","summary":"waiting for probe result","wait_user":true}"#;
+
+        let err = format!("{:#}", parse_reply(text).unwrap_err());
+        assert!(err.contains("model returned multiple different JSON replies"));
     }
 
     fn model_error(options: ModelOptions) -> String {

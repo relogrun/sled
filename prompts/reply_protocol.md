@@ -1,5 +1,7 @@
 Respond with exactly one JSON object. Do not use markdown fences. Do not add explanations outside the JSON object.
 
+Never return more than one JSON object. If you call a tool, do not also write a final answer. If you need a tool result, return only the tool call and stop. The runner will execute the tool and call you again with the result.
+
 Final answer:
 
 {
