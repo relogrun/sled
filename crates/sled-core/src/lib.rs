@@ -6,7 +6,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
 
-pub const DEFAULT_SYSTEM_PROMPT: &str = concat!(
+const DEFAULT_SYSTEM_PROMPT: &str = concat!(
     include_str!("../../../prompts/system.md"),
     "\n\n",
     include_str!("../../../prompts/context_format.md"),
@@ -118,6 +118,12 @@ pub trait Fold: Send + Sync {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WriteOptions {
     pub body_mirror: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StepOptions {
+    pub protocol_prompt: Option<String>,
+    pub write_options: WriteOptions,
 }
 
 #[derive(Clone, Debug)]
@@ -437,8 +443,8 @@ pub fn validate_single_open(slots: &[Slot]) -> Result<Option<&Slot>> {
 
 pub fn preview_model_input(
     dir: &Path,
-    default_system: &str,
     fold: &dyn Fold,
+    options: &StepOptions,
 ) -> Result<(String, Context)> {
     let system_config = read_system_config(dir)?;
     let mut slots = scan(dir)?;
@@ -460,7 +466,7 @@ pub fn preview_model_input(
     }
 
     Ok((
-        resolve_system_prompt(default_system, &system_config),
+        resolve_system_prompt(options.protocol_prompt.as_deref(), &system_config),
         fold.assemble(&slots)?,
     ))
 }
@@ -504,23 +510,22 @@ pub async fn step(
     dir: &Path,
     model: &dyn Model,
     tools: &dyn ToolExecutor,
-    system: &str,
     fold: &dyn Fold,
 ) -> Result<StepOutcome> {
-    step_with_options(dir, model, tools, system, fold, WriteOptions::default()).await
+    step_with_options(dir, model, tools, fold, StepOptions::default()).await
 }
 
 pub async fn step_with_options(
     dir: &Path,
     model: &dyn Model,
     tools: &dyn ToolExecutor,
-    system: &str,
     fold: &dyn Fold,
-    write_options: WriteOptions,
+    options: StepOptions,
 ) -> Result<StepOutcome> {
     debug!(dir = %dir.display(), "runner step start");
     fs::create_dir_all(dir)?;
     let system_config = read_system_config(dir)?;
+    let write_options = options.write_options;
     let slots = scan(dir)?;
     let open = validate_single_open(&slots)?;
 
@@ -619,7 +624,7 @@ pub async fn step_with_options(
             }
 
             let context = fold.assemble(&slots)?;
-            let system = resolve_system_prompt(system, &system_config);
+            let system = resolve_system_prompt(options.protocol_prompt.as_deref(), &system_config);
             match model.complete(&system, &context).await? {
                 Reply::Final {
                     text,
@@ -677,23 +682,21 @@ pub async fn run_until_stop(
     dir: &Path,
     model: &dyn Model,
     tools: &dyn ToolExecutor,
-    system: &str,
     fold: &dyn Fold,
 ) -> Result<StepOutcome> {
-    run_until_stop_with_options(dir, model, tools, system, fold, WriteOptions::default()).await
+    run_until_stop_with_options(dir, model, tools, fold, StepOptions::default()).await
 }
 
 pub async fn run_until_stop_with_options(
     dir: &Path,
     model: &dyn Model,
     tools: &dyn ToolExecutor,
-    system: &str,
     fold: &dyn Fold,
-    write_options: WriteOptions,
+    options: StepOptions,
 ) -> Result<StepOutcome> {
     info!(dir = %dir.display(), "runner started");
     loop {
-        match step_with_options(dir, model, tools, system, fold, write_options).await? {
+        match step_with_options(dir, model, tools, fold, options.clone()).await? {
             StepOutcome::Continue => continue,
             other => return Ok(other),
         }
@@ -808,12 +811,17 @@ pub fn status_report(dir: &Path) -> Result<String> {
     Ok(report)
 }
 
-pub fn resolve_system_prompt(default_system: &str, config: &SystemConfig) -> String {
-    if config.prompt.trim().is_empty() {
-        default_system.to_string()
-    } else {
-        format!("{}\n\n{}", default_system, config.prompt.trim())
+fn resolve_system_prompt(protocol_prompt: Option<&str>, config: &SystemConfig) -> String {
+    let mut parts = vec![DEFAULT_SYSTEM_PROMPT.to_string()];
+    if let Some(prompt) = protocol_prompt.map(str::trim)
+        && !prompt.is_empty()
+    {
+        parts.push(prompt.to_string());
     }
+    if !config.prompt.trim().is_empty() {
+        parts.push(config.prompt.trim().to_string());
+    }
+    parts.join("\n\n")
 }
 
 fn shorten(text: &str, limit: usize) -> String {
@@ -933,6 +941,19 @@ mod tests {
     }
 
     #[test]
+    fn system_prompt_is_internal_prompt_plus_fragments() {
+        let system = resolve_system_prompt(
+            Some("Profile protocol."),
+            &SystemConfig {
+                prompt: "Dialog prompt.".into(),
+            },
+        );
+
+        assert!(system.starts_with(DEFAULT_SYSTEM_PROMPT));
+        assert!(system.contains("\n\nProfile protocol.\n\nDialog prompt."));
+    }
+
+    #[test]
     fn rejects_two_open_slots() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
@@ -989,7 +1010,7 @@ mod tests {
         let dir = temp_dir();
         create_two_needs_input_slots(&dir);
 
-        let err = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
+        let err = step(&dir, &NoopModel, &PanicTools, &NoopFold)
             .await
             .unwrap_err()
             .to_string();
@@ -1072,9 +1093,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = step(&dir, &NoopModel, &FakeTools, "system", &NoopFold)
-            .await
-            .unwrap();
+        let outcome = step(&dir, &NoopModel, &FakeTools, &NoopFold).await.unwrap();
         assert!(matches!(outcome, StepOutcome::Continue));
 
         let slots = scan(&dir).unwrap();
@@ -1105,7 +1124,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
+        let outcome = step(&dir, &NoopModel, &PanicTools, &NoopFold)
             .await
             .unwrap();
         assert!(matches!(outcome, StepOutcome::Continue));
@@ -1136,7 +1155,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = step(&dir, &NoopModel, &SuspendTools, "system", &NoopFold)
+        let outcome = step(&dir, &NoopModel, &SuspendTools, &NoopFold)
             .await
             .unwrap();
         assert!(matches!(outcome, StepOutcome::NeedsInput(_)));
@@ -1176,7 +1195,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
+        let outcome = step(&dir, &NoopModel, &PanicTools, &NoopFold)
             .await
             .unwrap();
         assert!(matches!(outcome, StepOutcome::NeedsInput(_)));
@@ -1206,7 +1225,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
+        let outcome = step(&dir, &NoopModel, &PanicTools, &NoopFold)
             .await
             .unwrap();
         assert!(matches!(outcome, StepOutcome::Continue));
@@ -1240,7 +1259,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = step(&dir, &NoopModel, &PanicTools, "system", &NoopFold)
+        let outcome = step(&dir, &NoopModel, &PanicTools, &NoopFold)
             .await
             .unwrap();
         assert!(matches!(outcome, StepOutcome::Continue));

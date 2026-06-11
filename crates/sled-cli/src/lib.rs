@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use sled_ai::{ModelOptions, Provider, create_model_with_options, default_model};
 use sled_core::Fold;
 use sled_core::{
-    DEFAULT_SYSTEM_PROMPT, StepOutcome, SystemConfig, WriteOptions, durable_write,
-    preview_model_input, run_until_stop_with_options, say_with_options, status_report,
-    write_default_system_config, write_system_config,
+    StepOptions, StepOutcome, SystemConfig, WriteOptions, durable_write, preview_model_input,
+    run_until_stop_with_options, say_with_options, status_report, write_default_system_config,
+    write_system_config,
 };
 use sled_fold::{AllFold, RecentBytesFold, RecentMessagesFold};
 use sled_tools::ToolRegistry;
@@ -161,7 +161,6 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
     dotenvy::dotenv().ok();
     init_logging();
     let cli = Cli::parse();
-    let base_system_prompt = profile_system_prompt(&profile);
 
     match cli.command {
         Command::Init {
@@ -195,13 +194,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             let path = say_with_options(&dir, &text, WriteOptions { body_mirror })?;
             println!("wrote {}", path.display());
             if run {
-                run_dialog(
-                    &dir,
-                    &profile,
-                    &base_system_prompt,
-                    run_options_from_resolved_config(config)?,
-                )
-                .await?;
+                run_dialog(&dir, &profile, run_options_from_resolved_config(config)?).await?;
             }
         }
         Command::Config {
@@ -254,13 +247,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
                 body_mirror: body_mirror_override(body_mirror),
             };
             let (config, _) = read_resolved_dialog_config(&dir, overrides)?;
-            run_dialog(
-                &dir,
-                &profile,
-                &base_system_prompt,
-                run_options_from_resolved_config(config)?,
-            )
-            .await?;
+            run_dialog(&dir, &profile, run_options_from_resolved_config(config)?).await?;
         }
         Command::Status { dir } => {
             print!("{}", status_report(&dir)?);
@@ -270,7 +257,8 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             let (config, _) = read_resolved_dialog_config(&dir, DialogOptionOverrides::default())?;
             let fold_override = build_fold_override(&config)?;
             let fold = selected_fold(&profile, fold_override.as_deref());
-            let (system, context) = preview_model_input(&dir, &base_system_prompt, fold)?;
+            let (system, context) =
+                preview_model_input(&dir, fold, &step_options(&profile, false))?;
             println!("=== system ===\n{}\n", system);
             println!("=== index ===\n{}", context.index);
             println!("=== bodies ===\n{}", context.bodies);
@@ -309,12 +297,7 @@ struct DialogOptionOverrides {
     body_mirror: Option<bool>,
 }
 
-async fn run_dialog(
-    dir: &Path,
-    profile: &Profile,
-    system_prompt: &str,
-    options: RunOptions,
-) -> Result<()> {
+async fn run_dialog(dir: &Path, profile: &Profile, options: RunOptions) -> Result<()> {
     let model = create_model_with_options(
         options.provider,
         ModelOptions {
@@ -328,11 +311,8 @@ async fn run_dialog(
         dir,
         model.as_ref(),
         &profile.tools,
-        system_prompt,
         fold,
-        WriteOptions {
-            body_mirror: options.body_mirror,
-        },
+        step_options(profile, options.body_mirror),
     )
     .await?
     {
@@ -538,10 +518,10 @@ fn selected_fold<'a>(profile: &'a Profile, fold_override: Option<&'a dyn Fold>) 
     fold_override.unwrap_or(profile.fold.as_ref())
 }
 
-fn profile_system_prompt(profile: &Profile) -> String {
-    match profile.protocol_prompt.as_deref().map(str::trim) {
-        Some(prompt) if !prompt.is_empty() => format!("{DEFAULT_SYSTEM_PROMPT}\n\n{prompt}"),
-        _ => DEFAULT_SYSTEM_PROMPT.to_string(),
+fn step_options(profile: &Profile, body_mirror: bool) -> StepOptions {
+    StepOptions {
+        protocol_prompt: profile.protocol_prompt.clone(),
+        write_options: WriteOptions { body_mirror },
     }
 }
 
@@ -689,14 +669,17 @@ mod tests {
     }
 
     #[test]
-    fn profile_system_prompt_appends_protocol_prompt() {
+    fn step_options_carry_profile_protocol_prompt() {
         let profile = Profile {
             protocol_prompt: Some("Custom protocol text.".into()),
             ..Profile::default()
         };
 
-        let prompt = profile_system_prompt(&profile);
-        assert!(prompt.starts_with(DEFAULT_SYSTEM_PROMPT));
-        assert!(prompt.ends_with("Custom protocol text."));
+        let options = step_options(&profile, true);
+        assert_eq!(
+            options.protocol_prompt.as_deref(),
+            Some("Custom protocol text.")
+        );
+        assert!(options.write_options.body_mirror);
     }
 }
