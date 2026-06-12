@@ -4,7 +4,7 @@ use reqwest::{
     RequestBuilder, Response, StatusCode,
     header::{HeaderMap, RETRY_AFTER},
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use sled_core::{Call, Context, Model, Reply};
 use std::fmt;
 use std::io::{self, Write};
@@ -453,6 +453,10 @@ pub(crate) fn parse_reply(text: &str) -> Result<Reply> {
     let value =
         parse_json_response(clean).with_context(|| format!("model returned non-JSON: {text}"))?;
 
+    parse_reply_value(&value).with_context(|| format!("invalid model response object: {value}"))
+}
+
+pub(crate) fn parse_reply_value(value: &Value) -> Result<Reply> {
     match value["type"].as_str() {
         Some("final") => Ok(Reply::Final {
             text: value["text"].as_str().unwrap_or_default().into(),
@@ -462,12 +466,67 @@ pub(crate) fn parse_reply(text: &str) -> Result<Reply> {
         Some("tool") => Ok(Reply::Tool {
             call: Call {
                 tool: value["tool"].as_str().unwrap_or_default().into(),
-                args: value["args"].clone(),
+                args: reply_args(value)?,
             },
             summary: value["summary"].as_str().unwrap_or_default().into(),
         }),
-        _ => bail!("unknown model response type: {clean}"),
+        _ => bail!("unknown model response type"),
     }
+}
+
+fn reply_args(value: &Value) -> Result<Value> {
+    if let Some(args_json) = value["args_json"].as_str() {
+        if args_json.trim().is_empty() {
+            return Ok(json!({}));
+        }
+        let args: Value = serde_json::from_str(args_json)
+            .with_context(|| format!("args_json is not valid JSON: {args_json}"))?;
+        if !args.is_object() {
+            bail!("args_json must contain a JSON object");
+        }
+        return Ok(args);
+    }
+
+    if value.get("args").is_some() {
+        return Ok(value["args"].clone());
+    }
+
+    Ok(json!({}))
+}
+
+pub(crate) fn sled_reply_json_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": ["final", "tool"],
+                "description": "Use final for assistant text, tool for exactly one tool call."
+            },
+            "text": {
+                "type": "string",
+                "description": "Final assistant text. Empty string for tool calls."
+            },
+            "summary": {
+                "type": "string",
+                "description": "Short summary, up to 80 characters."
+            },
+            "wait_user": {
+                "type": "boolean",
+                "description": "True only when a final answer needs a user reply. False for tool calls."
+            },
+            "tool": {
+                "type": "string",
+                "description": "Tool name for tool calls. Empty string for final answers."
+            },
+            "args_json": {
+                "type": "string",
+                "description": "A compact JSON object string with tool arguments. Use \"{}\" for final answers."
+            }
+        },
+        "required": ["type", "text", "summary", "wait_user", "tool", "args_json"],
+        "additionalProperties": false
+    })
 }
 
 fn parse_json_response(clean: &str) -> Result<Value> {
@@ -632,6 +691,51 @@ I will wait for the result."#;
             }
             other => panic!("expected tool reply, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_tool_reply_with_args_json() {
+        let text = r#"{
+  "type": "tool",
+  "text": "",
+  "summary": "probe f(14)",
+  "wait_user": false,
+  "tool": "probe",
+  "args_json": "{\"x\":14}"
+}"#;
+
+        match parse_reply(text).unwrap() {
+            Reply::Tool { call, summary } => {
+                assert_eq!(call.tool, "probe");
+                assert_eq!(call.args["x"], 14);
+                assert_eq!(summary, "probe f(14)");
+            }
+            other => panic!("expected tool reply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_args_json_that_is_not_an_object() {
+        let text = r#"{
+  "type": "tool",
+  "text": "",
+  "summary": "bad args",
+  "wait_user": false,
+  "tool": "probe",
+  "args_json": "[1,2,3]"
+}"#;
+
+        let err = format!("{:#}", parse_reply(text).unwrap_err());
+        assert!(err.contains("args_json must contain a JSON object"));
+    }
+
+    #[test]
+    fn sled_reply_schema_uses_string_encoded_args() {
+        let schema = sled_reply_json_schema();
+
+        assert_eq!(schema["properties"]["args_json"]["type"], "string");
+        assert!(schema["properties"]["args"].is_null());
+        assert_eq!(schema["additionalProperties"], false);
     }
 
     #[test]

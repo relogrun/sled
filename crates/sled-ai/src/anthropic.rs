@@ -1,6 +1,6 @@
 use crate::{
     AnthropicEffort, AnthropicThinking, Provider, RequestDiagnostics, parse_reply,
-    send_model_request_with_retry,
+    parse_reply_value, send_model_request_with_retry, sled_reply_json_schema,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -76,9 +76,8 @@ impl Model for AnthropicModel {
             .await?;
 
         info!(provider = "anthropic", model = %self.model, "received model response");
-        let text = anthropic_response_text(&response)
-            .ok_or_else(|| anyhow!("empty Anthropic response: {response}"))?;
-        parse_reply(&text)
+        anthropic_response_reply(&response)
+            .ok_or_else(|| anyhow!("empty Anthropic response: {response}"))?
     }
 }
 
@@ -93,7 +92,12 @@ fn anthropic_messages_payload(
         "model": model,
         "max_tokens": 4096,
         "system": system,
-        "messages": [{"role": "user", "content": user}]
+        "messages": [{"role": "user", "content": user}],
+        "tools": [anthropic_sled_reply_tool()],
+        "tool_choice": {
+            "type": "tool",
+            "name": "sled_reply"
+        }
     });
     if let Some(effort) = effort {
         payload["output_config"] = json!({ "effort": effort.to_string() });
@@ -102,6 +106,31 @@ fn anthropic_messages_payload(
         payload["thinking"] = json!({ "type": "adaptive" });
     }
     payload
+}
+
+fn anthropic_sled_reply_tool() -> Value {
+    json!({
+        "name": "sled_reply",
+        "description": "Return exactly one sled dialog reply: either a final answer or one sled tool call.",
+        "input_schema": sled_reply_json_schema(),
+        "strict": true
+    })
+}
+
+fn anthropic_response_reply(response: &Value) -> Option<Result<Reply>> {
+    for content in response["content"].as_array()? {
+        if content["type"]
+            .as_str()
+            .is_some_and(|kind| kind == "tool_use")
+            && content["name"]
+                .as_str()
+                .is_some_and(|name| name == "sled_reply")
+        {
+            return Some(parse_reply_value(&content["input"]));
+        }
+    }
+
+    anthropic_response_text(response).map(|text| parse_reply(&text))
 }
 
 fn anthropic_response_text(response: &Value) -> Option<String> {
@@ -138,6 +167,10 @@ mod tests {
         assert_eq!(payload["model"], "claude-sonnet-4-6");
         assert_eq!(payload["output_config"]["effort"], "medium");
         assert_eq!(payload["thinking"]["type"], "adaptive");
+        assert_eq!(payload["tool_choice"]["type"], "tool");
+        assert_eq!(payload["tool_choice"]["name"], "sled_reply");
+        assert_eq!(payload["tools"][0]["name"], "sled_reply");
+        assert_eq!(payload["tools"][0]["strict"], true);
     }
 
     #[test]
@@ -153,5 +186,34 @@ mod tests {
             anthropic_response_text(&response).as_deref(),
             Some("{\"type\":\"final\",\"text\":\"ok\"}")
         );
+    }
+
+    #[test]
+    fn extracts_anthropic_sled_reply_tool_use() {
+        let response = json!({
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "sled_reply",
+                    "input": {
+                        "type": "tool",
+                        "text": "",
+                        "summary": "probe x",
+                        "wait_user": false,
+                        "tool": "probe",
+                        "args_json": "{\"x\":14}"
+                    }
+                }
+            ]
+        });
+
+        match anthropic_response_reply(&response).unwrap().unwrap() {
+            Reply::Tool { call, summary } => {
+                assert_eq!(call.tool, "probe");
+                assert_eq!(call.args["x"], 14);
+                assert_eq!(summary, "probe x");
+            }
+            other => panic!("expected tool reply, got {other:?}"),
+        }
     }
 }

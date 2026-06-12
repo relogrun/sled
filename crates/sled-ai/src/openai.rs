@@ -1,5 +1,6 @@
 use crate::{
-    OpenAiReasoningEffort, Provider, RequestDiagnostics, parse_reply, send_model_request_with_retry,
+    OpenAiReasoningEffort, Provider, RequestDiagnostics, parse_reply,
+    send_model_request_with_retry, sled_reply_json_schema,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -90,6 +91,14 @@ fn openai_responses_payload(
         "model": model,
         "instructions": system,
         "input": user,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "sled_reply",
+                "schema": sled_reply_json_schema(),
+                "strict": true
+            }
+        }
     });
     if let Some(openai_reasoning_effort) = openai_reasoning_effort {
         payload["reasoning"] = json!({ "effort": openai_reasoning_effort.to_string() });
@@ -141,6 +150,9 @@ mod tests {
         assert_eq!(payload["instructions"], "system prompt");
         assert_eq!(payload["input"], "user context");
         assert_eq!(payload["reasoning"]["effort"], "low");
+        assert_eq!(payload["text"]["format"]["type"], "json_schema");
+        assert_eq!(payload["text"]["format"]["name"], "sled_reply");
+        assert_eq!(payload["text"]["format"]["strict"], true);
         assert!(payload["messages"].is_null());
         assert!(payload["temperature"].is_null());
     }
