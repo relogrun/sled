@@ -124,7 +124,8 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--body-mirror` to save markdown body mirrors as enabled. Default: off.
 - `run <dir>` — continue execution until done, needs-input, or error.
   - `--provider <operator|openai|openai-compatible|anthropic>` to set the provider. Default: `openai`.
-  - `--model <model>` to set the selected provider's model. Defaults: `openai=gpt-5.5` and `anthropic=claude-sonnet-4-6`. `openai-compatible` requires one.
+  - `--model <model>` to set the selected provider's model. Defaults: `openai=gpt-5.4-mini` and `anthropic=claude-sonnet-4-6`. `openai-compatible` requires one.
+  - `--reasoning <minimal|low|medium|high>` to set OpenAI reasoning effort for this run.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
   - `--all` to use the full message context. Default.
   - `--recent-messages <n>` to use `recent-messages`.
@@ -135,6 +136,7 @@ Use `cargo run -p sled-cli -- <command>` during development.
 - `config <dir>` — create or update `_config.json5`.
   - `--provider <operator|openai|openai-compatible|anthropic>` to save a provider override. If absent, the runtime default is `openai`.
   - `--model <model>` to save a model override for the selected provider.
+  - `--reasoning <minimal|low|medium|high>` to save OpenAI reasoning effort.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
   - `--all` to save full message context by clearing context limits.
   - `--recent-messages <n>` to select `recent-messages` and set its limit.
@@ -174,7 +176,8 @@ Each dialog may have `_config.json5` for local, non-secret runtime overrides. Th
 {
   provider: "openai-compatible",
   openai: {
-    model: "gpt-5.5",
+    model: "gpt-5.4-mini",
+    reasoning: "low",
   },
   anthropic: {
     model: "claude-sonnet-4-6",
@@ -192,6 +195,7 @@ Supported keys:
 
 - `provider`: `operator`, `openai`, `openai-compatible`, or `anthropic`.
 - `openai.model`: OpenAI model name.
+- `openai.reasoning`: OpenAI reasoning effort, one of `minimal`, `low`, `medium`, or `high`.
 - `anthropic.model`: Anthropic model name.
 - `openai_compatible.model`: model name for an OpenAI-compatible provider.
 - `openai_compatible.base_url`: base URL for `openai-compatible`, such as `https://openrouter.ai/api/v1`.
@@ -199,7 +203,7 @@ Supported keys:
 - `recent_bytes`: include the newest body sections that fit in this byte budget.
 - `body_mirror`: write readable `.done.md` mirrors beside JSON5 files.
 
-Runtime defaults: provider is `openai`, OpenAI model is `gpt-5.5`, Anthropic model is `claude-sonnet-4-6`, body mirrors are off, and `openai-compatible` requires both `openai_compatible.model` and `openai_compatible.base_url`.
+Runtime defaults: provider is `openai`, OpenAI model is `gpt-5.4-mini`, Anthropic model is `claude-sonnet-4-6`, body mirrors are off, and `openai-compatible` requires both `openai_compatible.model` and `openai_compatible.base_url`.
 
 If neither `recent_messages` nor `recent_bytes` is set, sled uses the full message context.
 

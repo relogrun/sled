@@ -49,9 +49,42 @@ impl std::fmt::Display for Provider {
 
 pub fn default_model(provider: Provider) -> Option<&'static str> {
     match provider {
-        Provider::OpenAi => Some("gpt-5.5"),
+        Provider::OpenAi => Some("gpt-5.4-mini"),
         Provider::Anthropic => Some("claude-sonnet-4-6"),
         Provider::Operator | Provider::OpenAiCompatible => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReasoningEffort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+impl std::str::FromStr for ReasoningEffort {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        Ok(match value {
+            "minimal" => Self::Minimal,
+            "low" => Self::Low,
+            "medium" => Self::Medium,
+            "high" => Self::High,
+            other => bail!("unknown reasoning effort: {other}"),
+        })
+    }
+}
+
+impl std::fmt::Display for ReasoningEffort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        })
     }
 }
 
@@ -59,6 +92,7 @@ pub fn default_model(provider: Provider) -> Option<&'static str> {
 pub struct ModelOptions {
     pub model: Option<String>,
     pub openai_compatible_base_url: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub temperature: Option<f32>,
 }
 
@@ -79,12 +113,11 @@ pub fn create_model_with_options(
                     .into()
             });
             info!(provider = %provider, model = %model, "creating model client");
-            Ok(Box::new(OpenAiModel {
+            Ok(Box::new(OpenAiResponsesModel {
                 client: Client::new(),
                 api_key,
                 model,
-                endpoint: "https://api.openai.com/v1/chat/completions".into(),
-                provider,
+                reasoning_effort: options.reasoning_effort,
                 temperature: options.temperature,
             }))
         }
@@ -101,12 +134,11 @@ pub fn create_model_with_options(
                 .context("SLED_OPENAI_COMPAT_API_KEY is required")?;
             let endpoint = chat_completions_endpoint(&base_url);
             info!(provider = %provider, model = %model, endpoint = %endpoint, "creating model client");
-            Ok(Box::new(OpenAiModel {
+            Ok(Box::new(OpenAiCompatibleModel {
                 client: Client::new(),
                 api_key,
                 model,
                 endpoint,
-                provider,
                 temperature: options.temperature,
             }))
         }
@@ -185,19 +217,116 @@ impl Model for OperatorModel {
     }
 }
 
-pub struct OpenAiModel {
+pub struct OpenAiResponsesModel {
     client: Client,
     api_key: String,
     model: String,
-    endpoint: String,
-    provider: Provider,
+    reasoning_effort: Option<ReasoningEffort>,
     temperature: Option<f32>,
 }
 
 #[async_trait]
-impl Model for OpenAiModel {
+impl Model for OpenAiResponsesModel {
     async fn complete(&self, system: &str, context: &Context) -> Result<Reply> {
-        info!(provider = %self.provider, model = %self.model, "sending model request");
+        info!(provider = "openai", model = %self.model, "sending model request");
+        debug!(
+            index_bytes = context.index.len(),
+            bodies_bytes = context.bodies.len(),
+            system_bytes = system.len(),
+            "model request context sizes"
+        );
+        let user = format!(
+            "Dialog index:\n{}\n\nOpened bodies:\n{}",
+            context.index, context.bodies
+        );
+        let payload = openai_responses_payload(
+            &self.model,
+            system,
+            &user,
+            self.reasoning_effort,
+            self.temperature,
+        );
+        let diagnostics = RequestDiagnostics::new(
+            serde_json::to_vec(&payload)?.len(),
+            system.len(),
+            context.index.len(),
+            context.bodies.len(),
+            "Bearer ".len() + self.api_key.len(),
+        );
+        let response: Value =
+            send_model_request_with_retry(Provider::OpenAi, &self.model, diagnostics, || {
+                self.client
+                    .post("https://api.openai.com/v1/responses")
+                    .bearer_auth(&self.api_key)
+                    .json(&payload)
+            })
+            .await?
+            .json()
+            .await?;
+
+        info!(provider = "openai", model = %self.model, "received model response");
+        let text = openai_response_text(&response)
+            .ok_or_else(|| anyhow!("empty OpenAI response: {response}"))?;
+        parse_reply(&text)
+    }
+}
+
+fn openai_responses_payload(
+    model: &str,
+    system: &str,
+    user: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    temperature: Option<f32>,
+) -> Value {
+    let mut payload = json!({
+        "model": model,
+        "instructions": system,
+        "input": user,
+    });
+    if let Some(reasoning_effort) = reasoning_effort {
+        payload["reasoning"] = json!({ "effort": reasoning_effort.to_string() });
+    }
+    if let Some(temperature) = temperature {
+        payload["temperature"] = json!(temperature);
+    }
+    payload
+}
+
+fn openai_response_text(response: &Value) -> Option<String> {
+    if let Some(text) = response["output_text"].as_str() {
+        if !text.trim().is_empty() {
+            return Some(text.to_string());
+        }
+    }
+
+    let mut texts = Vec::new();
+    for item in response["output"].as_array()? {
+        for content in item["content"].as_array().into_iter().flatten() {
+            if let Some(text) = content["text"].as_str() {
+                texts.push(text);
+            }
+        }
+    }
+    let text = texts.join("\n");
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+pub struct OpenAiCompatibleModel {
+    client: Client,
+    api_key: String,
+    model: String,
+    endpoint: String,
+    temperature: Option<f32>,
+}
+
+#[async_trait]
+impl Model for OpenAiCompatibleModel {
+    async fn complete(&self, system: &str, context: &Context) -> Result<Reply> {
+        info!(provider = "openai-compatible", model = %self.model, "sending model request");
         debug!(
             index_bytes = context.index.len(),
             bodies_bytes = context.bodies.len(),
@@ -225,18 +354,22 @@ impl Model for OpenAiModel {
             context.bodies.len(),
             "Bearer ".len() + self.api_key.len(),
         );
-        let response: Value =
-            send_model_request_with_retry(self.provider, &self.model, diagnostics, || {
+        let response: Value = send_model_request_with_retry(
+            Provider::OpenAiCompatible,
+            &self.model,
+            diagnostics,
+            || {
                 self.client
                     .post(&self.endpoint)
                     .bearer_auth(&self.api_key)
                     .json(&payload)
-            })
-            .await?
-            .json()
-            .await?;
+            },
+        )
+        .await?
+        .json()
+        .await?;
 
-        info!(provider = %self.provider, model = %self.model, "received model response");
+        info!(provider = "openai-compatible", model = %self.model, "received model response");
         let text = response["choices"][0]["message"]["content"]
             .as_str()
             .ok_or_else(|| anyhow!("empty OpenAI-compatible response: {response}"))?;
@@ -560,6 +693,59 @@ mod tests {
         let provider = "openai-compatible".parse::<Provider>().unwrap();
         assert!(matches!(provider, Provider::OpenAiCompatible));
         assert_eq!(provider.to_string(), "openai-compatible");
+    }
+
+    #[test]
+    fn parses_reasoning_effort() {
+        let effort = "low".parse::<ReasoningEffort>().unwrap();
+
+        assert_eq!(effort, ReasoningEffort::Low);
+        assert_eq!(effort.to_string(), "low");
+    }
+
+    #[test]
+    fn builds_openai_responses_payload_with_reasoning() {
+        let payload = openai_responses_payload(
+            "gpt-5.4-mini",
+            "system prompt",
+            "user context",
+            Some(ReasoningEffort::Low),
+            None,
+        );
+
+        assert_eq!(payload["model"], "gpt-5.4-mini");
+        assert_eq!(payload["instructions"], "system prompt");
+        assert_eq!(payload["input"], "user context");
+        assert_eq!(payload["reasoning"]["effort"], "low");
+        assert!(payload["messages"].is_null());
+        assert!(payload["temperature"].is_null());
+    }
+
+    #[test]
+    fn openai_responses_payload_omits_temperature_unless_explicit() {
+        let omitted = openai_responses_payload("gpt-5.4-mini", "system", "user", None, None);
+        let explicit = openai_responses_payload("gpt-5.4-mini", "system", "user", None, Some(1.0));
+
+        assert!(omitted["temperature"].is_null());
+        assert_eq!(explicit["temperature"], 1.0);
+    }
+
+    #[test]
+    fn extracts_openai_output_text() {
+        let response = json!({
+            "output": [
+                {
+                    "content": [
+                        {"type": "output_text", "text": "{\"type\":\"final\",\"text\":\"ok\"}"}
+                    ]
+                }
+            ]
+        });
+
+        assert_eq!(
+            openai_response_text(&response).as_deref(),
+            Some("{\"type\":\"final\",\"text\":\"ok\"}")
+        );
     }
 
     #[test]
