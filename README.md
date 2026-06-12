@@ -282,8 +282,25 @@ The two main control points are tools, which let the model act, and folds, which
 
 ### Adding a Tool
 
-Add a tool when the model needs a new action. Each built-in tool in `sled-tools` has its own source file. Implement the `Tool` trait and return `ToolResult::Completed(value)` for a normal result or `ToolResult::Suspended(request)` when a human must answer before the tool call can finish. Register the tool in a `ToolRegistry` and pass it through a `Profile`. Put the tool instructions in `_system.json5` with `init --system`, `init --system-file`, or a manual edit so the model knows how to call it. Start from `ToolRegistry::with_defaults()` to include built-ins, or `ToolRegistry::new()` to exclude them. See `crates/sled-cli/examples/custom_profile.rs` for a minimal custom binary.
+Add a tool when the model needs a new action.
+
+- Put the tool in its own source file, like the built-in tools in `sled-tools`.
+- Implement the `Tool` trait.
+- Return `ToolResult::Completed(value)` for a normal result.
+- Return `ToolResult::Suspended(request)` when a human must answer before the tool call can finish.
+- Register the tool in a `ToolRegistry` and pass it through a `Profile`.
+- Start from `ToolRegistry::with_defaults()` to include built-ins, or `ToolRegistry::new()` to exclude them.
+- Put the tool instructions in `_system.json5` with `init --system`, `init --system-file`, or a manual edit so the model knows how to call it.
+
+See `crates/sled-cli/examples/custom_profile.rs` for a minimal custom binary.
 
 ### Adding a Fold
 
-Add a fold when the model should see a different representation of the dialog. Folds implement `sled_core::Fold` and live in `sled-fold`. A fold receives the scanned slots and returns `Context { index, bodies }`. This is the only place that decides how the directory becomes model context. Existing examples are `AllFold`, `RecentMessagesFold`, and `RecentBytesFold`.
+Add a fold when the model should see a different representation of the dialog.
+
+- Implement `sled_core::Fold`.
+- Put reusable fold implementations in `sled-fold`.
+- Receive the scanned slots and return `Context { index, bodies }`.
+- Do all context selection, summarization, compaction, or reshaping inside the fold.
+
+This is the only place that decides how the directory becomes model context. Existing examples are `AllFold`, `RecentMessagesFold`, and `RecentBytesFold`.
