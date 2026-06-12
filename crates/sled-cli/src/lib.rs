@@ -1,7 +1,9 @@
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use sled_ai::{ModelOptions, Provider, ReasoningEffort, create_model_with_options, default_model};
+use sled_ai::{
+    ModelOptions, OpenAiReasoningEffort, Provider, create_model_with_options, default_model,
+};
 use sled_core::Fold;
 use sled_core::{
     StepOutcome, WriteOptions, durable_write, preview_model_input, run_until_stop_with_options,
@@ -47,8 +49,8 @@ enum Command {
         provider: Option<Provider>,
         #[arg(long, help = "Save model override for the selected provider")]
         model: Option<String>,
-        #[arg(long, help = "Save OpenAI reasoning effort")]
-        reasoning: Option<ReasoningEffort>,
+        #[arg(long = "openai-reasoning", help = "Save OpenAI reasoning effort")]
+        openai_reasoning: Option<OpenAiReasoningEffort>,
         #[arg(
             long = "openai-compatible-base-url",
             help = "Save base URL for openai-compatible providers"
@@ -78,8 +80,11 @@ enum Command {
             help = "Model override for the selected provider (defaults: openai=gpt-5.4-mini, anthropic=claude-sonnet-4-6; openai-compatible requires one)"
         )]
         model: Option<String>,
-        #[arg(long, help = "OpenAI reasoning effort for this run")]
-        reasoning: Option<ReasoningEffort>,
+        #[arg(
+            long = "openai-reasoning",
+            help = "OpenAI reasoning effort for this run"
+        )]
+        openai_reasoning: Option<OpenAiReasoningEffort>,
         #[arg(
             long = "openai-compatible-base-url",
             help = "Base URL for openai-compatible providers"
@@ -210,7 +215,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             dir,
             provider,
             model,
-            reasoning,
+            openai_reasoning,
             openai_compatible_base_url,
             all,
             recent_messages,
@@ -224,7 +229,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
                 DialogOptionOverrides {
                     provider,
                     model,
-                    reasoning,
+                    openai_reasoning,
                     openai_compatible_base_url,
                     all,
                     recent_messages,
@@ -241,7 +246,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             dir,
             provider,
             model,
-            reasoning,
+            openai_reasoning,
             openai_compatible_base_url,
             all,
             recent_messages,
@@ -252,7 +257,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             let overrides = DialogOptionOverrides {
                 provider,
                 model,
-                reasoning,
+                openai_reasoning,
                 openai_compatible_base_url,
                 all,
                 recent_messages,
@@ -283,7 +288,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
 struct RunOptions {
     provider: Provider,
     model: Option<String>,
-    reasoning_effort: Option<ReasoningEffort>,
+    openai_reasoning_effort: Option<OpenAiReasoningEffort>,
     openai_compatible_base_url: Option<String>,
     body_mirror: bool,
     fold_override: Option<Box<dyn Fold>>,
@@ -293,7 +298,7 @@ struct RunOptions {
 struct ResolvedDialogConfig {
     provider: Provider,
     model: Option<String>,
-    reasoning_effort: Option<ReasoningEffort>,
+    openai_reasoning_effort: Option<OpenAiReasoningEffort>,
     openai_compatible_base_url: Option<String>,
     recent_messages: Option<usize>,
     recent_bytes: Option<usize>,
@@ -304,7 +309,7 @@ struct ResolvedDialogConfig {
 struct DialogOptionOverrides {
     provider: Option<Provider>,
     model: Option<String>,
-    reasoning: Option<ReasoningEffort>,
+    openai_reasoning: Option<OpenAiReasoningEffort>,
     openai_compatible_base_url: Option<String>,
     all: bool,
     recent_messages: Option<usize>,
@@ -318,7 +323,7 @@ async fn run_dialog(dir: &Path, profile: &Profile, options: RunOptions) -> Resul
         ModelOptions {
             model: options.model,
             openai_compatible_base_url: options.openai_compatible_base_url,
-            reasoning_effort: options.reasoning_effort,
+            openai_reasoning_effort: options.openai_reasoning_effort,
             temperature: None,
         },
     )?;
@@ -353,7 +358,7 @@ fn resolve_dialog_config(
         provider,
         model: provider_model(&config, provider)
             .or_else(|| default_model(provider).map(str::to_string)),
-        reasoning_effort: provider_reasoning_effort(&config, provider)?,
+        openai_reasoning_effort: provider_openai_reasoning_effort(&config, provider)?,
         openai_compatible_base_url: config
             .openai_compatible
             .as_ref()
@@ -406,7 +411,7 @@ fn run_options_from_resolved_config(config: ResolvedDialogConfig) -> Result<RunO
     Ok(RunOptions {
         provider: config.provider,
         model: config.model,
-        reasoning_effort: config.reasoning_effort,
+        openai_reasoning_effort: config.openai_reasoning_effort,
         openai_compatible_base_url: config.openai_compatible_base_url,
         body_mirror: config.body_mirror,
         fold_override,
@@ -420,7 +425,7 @@ fn apply_dialog_option_overrides(
     let DialogOptionOverrides {
         provider,
         model,
-        reasoning,
+        openai_reasoning,
         openai_compatible_base_url,
         all,
         recent_messages,
@@ -435,8 +440,8 @@ fn apply_dialog_option_overrides(
     if let Some(model) = model {
         set_provider_model(config, active_provider, model)?;
     }
-    if let Some(reasoning) = reasoning {
-        set_provider_reasoning(config, active_provider, reasoning)?;
+    if let Some(openai_reasoning) = openai_reasoning {
+        set_provider_openai_reasoning(config, active_provider, openai_reasoning)?;
     }
     if let Some(openai_compatible_base_url) = openai_compatible_base_url {
         config
@@ -527,10 +532,10 @@ fn set_provider_model(config: &mut DialogConfig, provider: Provider, model: Stri
     Ok(())
 }
 
-fn provider_reasoning_effort(
+fn provider_openai_reasoning_effort(
     config: &DialogConfig,
     provider: Provider,
-) -> Result<Option<ReasoningEffort>> {
+) -> Result<Option<OpenAiReasoningEffort>> {
     match provider {
         Provider::OpenAi => config
             .openai
@@ -542,10 +547,10 @@ fn provider_reasoning_effort(
     }
 }
 
-fn set_provider_reasoning(
+fn set_provider_openai_reasoning(
     config: &mut DialogConfig,
     provider: Provider,
-    reasoning: ReasoningEffort,
+    reasoning: OpenAiReasoningEffort,
 ) -> Result<()> {
     match provider {
         Provider::OpenAi => {
@@ -555,13 +560,13 @@ fn set_provider_reasoning(
                 .reasoning = Some(reasoning.to_string());
         }
         Provider::Operator => {
-            anyhow::bail!("--reasoning is not used with provider operator");
+            anyhow::bail!("--openai-reasoning is not used with provider operator");
         }
         Provider::OpenAiCompatible => {
-            anyhow::bail!("--reasoning is not used with provider openai-compatible");
+            anyhow::bail!("--openai-reasoning is not used with provider openai-compatible");
         }
         Provider::Anthropic => {
-            anyhow::bail!("--reasoning is not used with provider anthropic");
+            anyhow::bail!("--openai-reasoning is not used with provider anthropic");
         }
     }
     Ok(())
@@ -704,9 +709,9 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_override_is_saved_under_openai() {
+    fn openai_reasoning_override_is_saved_under_openai() {
         let config = dialog_config_from_overrides(DialogOptionOverrides {
-            reasoning: Some(ReasoningEffort::Low),
+            openai_reasoning: Some(OpenAiReasoningEffort::Low),
             ..DialogOptionOverrides::default()
         })
         .unwrap();
@@ -718,16 +723,19 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_override_is_openai_only() {
+    fn openai_reasoning_override_is_openai_only() {
         let err = dialog_config_from_overrides(DialogOptionOverrides {
             provider: Some(Provider::Anthropic),
-            reasoning: Some(ReasoningEffort::Low),
+            openai_reasoning: Some(OpenAiReasoningEffort::Low),
             ..DialogOptionOverrides::default()
         })
         .unwrap_err()
         .to_string();
 
-        assert_eq!(err, "--reasoning is not used with provider anthropic");
+        assert_eq!(
+            err,
+            "--openai-reasoning is not used with provider anthropic"
+        );
     }
 
     #[test]

@@ -125,7 +125,7 @@ Use `cargo run -p sled-cli -- <command>` during development.
 - `run <dir>` — continue execution until done, needs-input, or error.
   - `--provider <operator|openai|openai-compatible|anthropic>` to set the provider. Default: `openai`.
   - `--model <model>` to set the selected provider's model. Defaults: `openai=gpt-5.4-mini` and `anthropic=claude-sonnet-4-6`. `openai-compatible` requires one.
-  - `--reasoning <minimal|low|medium|high>` to set OpenAI reasoning effort for this run.
+  - `--openai-reasoning <minimal|low|medium|high>` to set OpenAI reasoning effort for this run.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
   - `--all` to use the full message context. Default.
   - `--recent-messages <n>` to use `recent-messages`.
@@ -136,7 +136,7 @@ Use `cargo run -p sled-cli -- <command>` during development.
 - `config <dir>` — create or update `_config.json5`.
   - `--provider <operator|openai|openai-compatible|anthropic>` to save a provider override. If absent, the runtime default is `openai`.
   - `--model <model>` to save a model override for the selected provider.
-  - `--reasoning <minimal|low|medium|high>` to save OpenAI reasoning effort.
+  - `--openai-reasoning <minimal|low|medium|high>` to save OpenAI reasoning effort.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
   - `--all` to save full message context by clearing context limits.
   - `--recent-messages <n>` to select `recent-messages` and set its limit.

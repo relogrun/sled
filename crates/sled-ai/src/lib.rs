@@ -56,14 +56,14 @@ pub fn default_model(provider: Provider) -> Option<&'static str> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReasoningEffort {
+pub enum OpenAiReasoningEffort {
     Minimal,
     Low,
     Medium,
     High,
 }
 
-impl std::str::FromStr for ReasoningEffort {
+impl std::str::FromStr for OpenAiReasoningEffort {
     type Err = anyhow::Error;
 
     fn from_str(value: &str) -> Result<Self> {
@@ -77,7 +77,7 @@ impl std::str::FromStr for ReasoningEffort {
     }
 }
 
-impl std::fmt::Display for ReasoningEffort {
+impl std::fmt::Display for OpenAiReasoningEffort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Minimal => "minimal",
@@ -92,7 +92,7 @@ impl std::fmt::Display for ReasoningEffort {
 pub struct ModelOptions {
     pub model: Option<String>,
     pub openai_compatible_base_url: Option<String>,
-    pub reasoning_effort: Option<ReasoningEffort>,
+    pub openai_reasoning_effort: Option<OpenAiReasoningEffort>,
     pub temperature: Option<f32>,
 }
 
@@ -117,7 +117,7 @@ pub fn create_model_with_options(
                 client: Client::new(),
                 api_key,
                 model,
-                reasoning_effort: options.reasoning_effort,
+                openai_reasoning_effort: options.openai_reasoning_effort,
                 temperature: options.temperature,
             }))
         }
@@ -221,7 +221,7 @@ pub struct OpenAiResponsesModel {
     client: Client,
     api_key: String,
     model: String,
-    reasoning_effort: Option<ReasoningEffort>,
+    openai_reasoning_effort: Option<OpenAiReasoningEffort>,
     temperature: Option<f32>,
 }
 
@@ -243,7 +243,7 @@ impl Model for OpenAiResponsesModel {
             &self.model,
             system,
             &user,
-            self.reasoning_effort,
+            self.openai_reasoning_effort,
             self.temperature,
         );
         let diagnostics = RequestDiagnostics::new(
@@ -275,7 +275,7 @@ fn openai_responses_payload(
     model: &str,
     system: &str,
     user: &str,
-    reasoning_effort: Option<ReasoningEffort>,
+    openai_reasoning_effort: Option<OpenAiReasoningEffort>,
     temperature: Option<f32>,
 ) -> Value {
     let mut payload = json!({
@@ -283,8 +283,8 @@ fn openai_responses_payload(
         "instructions": system,
         "input": user,
     });
-    if let Some(reasoning_effort) = reasoning_effort {
-        payload["reasoning"] = json!({ "effort": reasoning_effort.to_string() });
+    if let Some(openai_reasoning_effort) = openai_reasoning_effort {
+        payload["reasoning"] = json!({ "effort": openai_reasoning_effort.to_string() });
     }
     if let Some(temperature) = temperature {
         payload["temperature"] = json!(temperature);
@@ -696,10 +696,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_reasoning_effort() {
-        let effort = "low".parse::<ReasoningEffort>().unwrap();
+    fn parses_openai_reasoning_effort() {
+        let effort = "low".parse::<OpenAiReasoningEffort>().unwrap();
 
-        assert_eq!(effort, ReasoningEffort::Low);
+        assert_eq!(effort, OpenAiReasoningEffort::Low);
         assert_eq!(effort.to_string(), "low");
     }
 
@@ -709,7 +709,7 @@ mod tests {
             "gpt-5.4-mini",
             "system prompt",
             "user context",
-            Some(ReasoningEffort::Low),
+            Some(OpenAiReasoningEffort::Low),
             None,
         );
 
