@@ -47,46 +47,46 @@ You usually work in a `say` / `run` loop: `say` writes what you say to whoever i
 Create a dialog and add a user message:
 
 ```bash
-cargo run -p sled-cli -- say ./dialog "Summarize https://example.com"
+cargo run -p sled-cli -- say ./runs/example "Summarize https://example.com"
 ```
 
 Run the assistant locally with `operator` first. It needs no API key and lets you try the file protocol directly:
 
 ```bash
-cargo run -p sled-cli -- run ./dialog --provider operator
+cargo run -p sled-cli -- run ./runs/example --provider operator
 ```
 
 Or run with the default OpenAI provider:
 
 ```bash
 export OPENAI_API_KEY=...
-cargo run -p sled-cli -- run ./dialog
+cargo run -p sled-cli -- run ./runs/example
 ```
 
 Look at the whole run:
 
 ```bash
-ls -1 ./dialog
-cargo run -p sled-cli -- status ./dialog
+ls -1 ./runs/example
+cargo run -p sled-cli -- status ./runs/example
 ```
 
 Inspect the exact context sent to the model:
 
 ```bash
-cargo run -p sled-cli -- context ./dialog
+cargo run -p sled-cli -- context ./runs/example
 ```
 
 When a run stops at `needs-input`, answer with `say` and continue with `run`:
 
 ```bash
-cargo run -p sled-cli -- say ./dialog "Use option A."
-cargo run -p sled-cli -- run ./dialog
+cargo run -p sled-cli -- say ./runs/example "Use option A."
+cargo run -p sled-cli -- run ./runs/example
 ```
 
 Or do both in one command:
 
 ```bash
-cargo run -p sled-cli -- say ./dialog "Use option A." --run
+cargo run -p sled-cli -- say ./runs/example "Use option A." --run
 ```
 
 ## File Roles and Statuses
@@ -210,7 +210,7 @@ If neither `recent_messages` nor `recent_bytes` is set, sled uses the full messa
 Write the file from the CLI when that is easier:
 
 ```bash
-cargo run -p sled-cli -- config ./dialog --recent-messages 8 --body-mirror
+cargo run -p sled-cli -- config ./runs/example --recent-messages 8 --body-mirror
 ```
 
 ## System Prompt
@@ -226,8 +226,8 @@ Each dialog has `_system.json5`:
 You can also set it during init:
 
 ```bash
-cargo run -p sled-cli -- init ./dialog --system "Be concise."
-cargo run -p sled-cli -- init ./dialog --system-file ./system.md
+cargo run -p sled-cli -- init ./runs/example --system "Be concise."
+cargo run -p sled-cli -- init ./runs/example --system-file ./system.md
 ```
 
 Built-in sled protocol prompts are always included. `_system.json5` only appends dialog-specific instructions.
@@ -262,8 +262,8 @@ Built-in tools:
 Logging uses `tracing` and is controlled by `RUST_LOG`:
 
 ```bash
-RUST_LOG=info cargo run -p sled-cli -- run ./dialog
-RUST_LOG=sled_core=debug,sled_ai=debug cargo run -p sled-cli -- run ./dialog
+RUST_LOG=info cargo run -p sled-cli -- run ./runs/example
+RUST_LOG=sled_core=debug,sled_ai=debug cargo run -p sled-cli -- run ./runs/example
 ```
 
 The default level is `warn`. API keys and full model context are not logged by default.
