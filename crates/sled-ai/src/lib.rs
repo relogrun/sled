@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 
 mod anthropic;
 mod openai;
+mod openai_compatible;
 
 const MODEL_HTTP_MAX_ATTEMPTS: usize = 3;
 
@@ -199,9 +200,9 @@ pub fn create_model_with_options(
             )?;
             let api_key = std::env::var("SLED_OPENAI_COMPAT_API_KEY")
                 .context("SLED_OPENAI_COMPAT_API_KEY is required")?;
-            let endpoint = openai::chat_completions_endpoint(&base_url);
+            let endpoint = openai_compatible::chat_completions_endpoint(&base_url);
             info!(provider = %provider, model = %model, endpoint = %endpoint, "creating model client");
-            Ok(Box::new(openai::OpenAiCompatibleModel::new(
+            Ok(Box::new(openai_compatible::OpenAiCompatibleModel::new(
                 api_key,
                 model,
                 endpoint,
