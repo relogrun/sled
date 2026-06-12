@@ -1,8 +1,8 @@
 use crate::{
-    OpenAiReasoningEffort, Provider, RequestDiagnostics, parse_reply,
+    OpenAiReasoningEffort, Provider, RequestDiagnostics, parse_reply, parse_reply_value,
     send_model_request_with_retry, sled_reply_json_schema,
 };
-use anyhow::{Result, anyhow};
+use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -74,9 +74,8 @@ impl Model for OpenAiResponsesModel {
             .await?;
 
         info!(provider = "openai", model = %self.model, "received model response");
-        let text = openai_response_text(&response)
-            .ok_or_else(|| anyhow!("empty OpenAI response: {response}"))?;
-        parse_reply(&text)
+        openai_response_reply(&response)
+            .ok_or_else(|| anyhow!("empty OpenAI response: {response}"))?
     }
 }
 
@@ -91,14 +90,12 @@ fn openai_responses_payload(
         "model": model,
         "instructions": system,
         "input": user,
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "sled_reply",
-                "schema": sled_reply_json_schema(),
-                "strict": true
-            }
-        }
+        "tools": [openai_sled_reply_tool()],
+        "tool_choice": {
+            "type": "function",
+            "name": "sled_reply"
+        },
+        "parallel_tool_calls": false
     });
     if let Some(openai_reasoning_effort) = openai_reasoning_effort {
         payload["reasoning"] = json!({ "effort": openai_reasoning_effort.to_string() });
@@ -107,6 +104,39 @@ fn openai_responses_payload(
         payload["temperature"] = json!(temperature);
     }
     payload
+}
+
+fn openai_sled_reply_tool() -> Value {
+    json!({
+        "type": "function",
+        "name": "sled_reply",
+        "description": "Return exactly one sled dialog reply: either a final answer or one sled tool call.",
+        "parameters": sled_reply_json_schema(),
+        "strict": true
+    })
+}
+
+fn openai_response_reply(response: &Value) -> Option<Result<Reply>> {
+    for item in response["output"].as_array()? {
+        if item["type"]
+            .as_str()
+            .is_some_and(|kind| kind == "function_call")
+            && item["name"]
+                .as_str()
+                .is_some_and(|name| name == "sled_reply")
+        {
+            let Some(arguments) = item["arguments"].as_str() else {
+                return Some(Err(anyhow!(
+                    "OpenAI sled_reply function call missing arguments"
+                )));
+            };
+            let value: Result<Value> = serde_json::from_str(arguments)
+                .with_context(|| format!("OpenAI sled_reply arguments are not JSON: {arguments}"));
+            return Some(value.and_then(|value| parse_reply_value(&value)));
+        }
+    }
+
+    openai_response_text(response).map(|text| parse_reply(&text))
 }
 
 fn openai_response_text(response: &Value) -> Option<String> {
@@ -150,10 +180,14 @@ mod tests {
         assert_eq!(payload["instructions"], "system prompt");
         assert_eq!(payload["input"], "user context");
         assert_eq!(payload["reasoning"]["effort"], "low");
-        assert_eq!(payload["text"]["format"]["type"], "json_schema");
-        assert_eq!(payload["text"]["format"]["name"], "sled_reply");
-        assert_eq!(payload["text"]["format"]["strict"], true);
+        assert_eq!(payload["tools"][0]["type"], "function");
+        assert_eq!(payload["tools"][0]["name"], "sled_reply");
+        assert_eq!(payload["tools"][0]["strict"], true);
+        assert_eq!(payload["tool_choice"]["type"], "function");
+        assert_eq!(payload["tool_choice"]["name"], "sled_reply");
+        assert_eq!(payload["parallel_tool_calls"], false);
         assert!(payload["messages"].is_null());
+        assert!(payload["text"].is_null());
         assert!(payload["temperature"].is_null());
     }
 
@@ -182,5 +216,34 @@ mod tests {
             openai_response_text(&response).as_deref(),
             Some("{\"type\":\"final\",\"text\":\"ok\"}")
         );
+    }
+
+    #[test]
+    fn extracts_openai_sled_reply_function_call() {
+        let response = json!({
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "sled_reply",
+                    "arguments": r#"{
+                        "type": "tool",
+                        "text": "",
+                        "summary": "probe x",
+                        "wait_user": false,
+                        "tool": "probe",
+                        "args_json": "{\"x\":14}"
+                    }"#
+                }
+            ]
+        });
+
+        match openai_response_reply(&response).unwrap().unwrap() {
+            Reply::Tool { call, summary } => {
+                assert_eq!(call.tool, "probe");
+                assert_eq!(call.args["x"], 14);
+                assert_eq!(summary, "probe x");
+            }
+            other => panic!("expected tool reply, got {other:?}"),
+        }
     }
 }
