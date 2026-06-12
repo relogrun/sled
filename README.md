@@ -126,6 +126,8 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--provider <operator|openai|openai-compatible|anthropic>` to set the provider. Default: `openai`.
   - `--model <model>` to set the selected provider's model. Defaults: `openai=gpt-5.4-mini` and `anthropic=claude-sonnet-4-6`. `openai-compatible` requires one.
   - `--openai-reasoning <minimal|low|medium|high>` to set OpenAI reasoning effort for this run.
+  - `--anthropic-effort <low|medium|high|xhigh|max>` to set Anthropic effort for this run.
+  - `--anthropic-thinking <off|adaptive>` to set Anthropic thinking mode for this run.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
   - `--all` to use the full message context. Default.
   - `--recent-messages <n>` to use `recent-messages`.
@@ -137,6 +139,8 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--provider <operator|openai|openai-compatible|anthropic>` to save a provider override. If absent, the runtime default is `openai`.
   - `--model <model>` to save a model override for the selected provider.
   - `--openai-reasoning <minimal|low|medium|high>` to save OpenAI reasoning effort.
+  - `--anthropic-effort <low|medium|high|xhigh|max>` to save Anthropic effort.
+  - `--anthropic-thinking <off|adaptive>` to save Anthropic thinking mode.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
   - `--all` to save full message context by clearing context limits.
   - `--recent-messages <n>` to select `recent-messages` and set its limit.
@@ -181,6 +185,8 @@ Each dialog may have `_config.json5` for local, non-secret runtime overrides. Th
   },
   anthropic: {
     model: "claude-sonnet-4-6",
+    effort: "medium",
+    thinking: "adaptive",
   },
   openai_compatible: {
     model: "openai/gpt-4o-mini",
@@ -197,6 +203,8 @@ Supported keys:
 - `openai.model`: OpenAI model name.
 - `openai.reasoning`: OpenAI reasoning effort, one of `minimal`, `low`, `medium`, or `high`.
 - `anthropic.model`: Anthropic model name.
+- `anthropic.effort`: Anthropic effort, one of `low`, `medium`, `high`, `xhigh`, or `max`.
+- `anthropic.thinking`: Anthropic thinking mode, `off` or `adaptive`.
 - `openai_compatible.model`: model name for an OpenAI-compatible provider.
 - `openai_compatible.base_url`: base URL for `openai-compatible`, such as `https://openrouter.ai/api/v1`.
 - `recent_messages`: include only the last `n` message bodies.

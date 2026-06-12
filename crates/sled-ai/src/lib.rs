@@ -88,11 +88,76 @@ impl std::fmt::Display for OpenAiReasoningEffort {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnthropicEffort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl std::str::FromStr for AnthropicEffort {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        Ok(match value {
+            "low" => Self::Low,
+            "medium" => Self::Medium,
+            "high" => Self::High,
+            "xhigh" => Self::XHigh,
+            "max" => Self::Max,
+            other => bail!("unknown Anthropic effort: {other}"),
+        })
+    }
+}
+
+impl std::fmt::Display for AnthropicEffort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnthropicThinking {
+    Off,
+    Adaptive,
+}
+
+impl std::str::FromStr for AnthropicThinking {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        Ok(match value {
+            "off" => Self::Off,
+            "adaptive" => Self::Adaptive,
+            other => bail!("unknown Anthropic thinking mode: {other}"),
+        })
+    }
+}
+
+impl std::fmt::Display for AnthropicThinking {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Off => "off",
+            Self::Adaptive => "adaptive",
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ModelOptions {
     pub model: Option<String>,
     pub openai_compatible_base_url: Option<String>,
     pub openai_reasoning_effort: Option<OpenAiReasoningEffort>,
+    pub anthropic_effort: Option<AnthropicEffort>,
+    pub anthropic_thinking: Option<AnthropicThinking>,
     pub temperature: Option<f32>,
 }
 
@@ -155,6 +220,8 @@ pub fn create_model_with_options(
                 client: Client::new(),
                 api_key,
                 model,
+                effort: options.anthropic_effort,
+                thinking: options.anthropic_thinking,
                 temperature: options.temperature,
             }))
         }
@@ -390,6 +457,8 @@ pub struct AnthropicModel {
     client: Client,
     api_key: String,
     model: String,
+    effort: Option<AnthropicEffort>,
+    thinking: Option<AnthropicThinking>,
     temperature: Option<f32>,
 }
 
@@ -407,12 +476,8 @@ impl Model for AnthropicModel {
             "Dialog index:\n{}\n\nOpened bodies:\n{}",
             context.index, context.bodies
         );
-        let mut payload = json!({
-            "model": self.model,
-            "max_tokens": 4096,
-            "system": system,
-            "messages": [{"role": "user", "content": user}]
-        });
+        let mut payload =
+            anthropic_messages_payload(&self.model, system, &user, self.effort, self.thinking);
         if let Some(temperature) = self.temperature {
             payload["temperature"] = json!(temperature);
         }
@@ -436,10 +501,48 @@ impl Model for AnthropicModel {
             .await?;
 
         info!(provider = "anthropic", model = %self.model, "received model response");
-        let text = response["content"][0]["text"]
-            .as_str()
+        let text = anthropic_response_text(&response)
             .ok_or_else(|| anyhow!("empty Anthropic response: {response}"))?;
-        parse_reply(text)
+        parse_reply(&text)
+    }
+}
+
+fn anthropic_messages_payload(
+    model: &str,
+    system: &str,
+    user: &str,
+    effort: Option<AnthropicEffort>,
+    thinking: Option<AnthropicThinking>,
+) -> Value {
+    let mut payload = json!({
+        "model": model,
+        "max_tokens": 4096,
+        "system": system,
+        "messages": [{"role": "user", "content": user}]
+    });
+    if let Some(effort) = effort {
+        payload["output_config"] = json!({ "effort": effort.to_string() });
+    }
+    if thinking == Some(AnthropicThinking::Adaptive) {
+        payload["thinking"] = json!({ "type": "adaptive" });
+    }
+    payload
+}
+
+fn anthropic_response_text(response: &Value) -> Option<String> {
+    let mut texts = Vec::new();
+    for content in response["content"].as_array()? {
+        if content["type"].as_str().is_some_and(|kind| kind == "text") {
+            if let Some(text) = content["text"].as_str() {
+                texts.push(text);
+            }
+        }
+    }
+    let text = texts.join("\n");
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
     }
 }
 
@@ -704,6 +807,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_anthropic_effort_and_thinking() {
+        assert_eq!(
+            "xhigh".parse::<AnthropicEffort>().unwrap(),
+            AnthropicEffort::XHigh
+        );
+        assert_eq!(
+            "adaptive".parse::<AnthropicThinking>().unwrap(),
+            AnthropicThinking::Adaptive
+        );
+    }
+
+    #[test]
     fn builds_openai_responses_payload_with_reasoning() {
         let payload = openai_responses_payload(
             "gpt-5.4-mini",
@@ -744,6 +859,36 @@ mod tests {
 
         assert_eq!(
             openai_response_text(&response).as_deref(),
+            Some("{\"type\":\"final\",\"text\":\"ok\"}")
+        );
+    }
+
+    #[test]
+    fn builds_anthropic_payload_with_effort_and_adaptive_thinking() {
+        let payload = anthropic_messages_payload(
+            "claude-sonnet-4-6",
+            "system prompt",
+            "user context",
+            Some(AnthropicEffort::Medium),
+            Some(AnthropicThinking::Adaptive),
+        );
+
+        assert_eq!(payload["model"], "claude-sonnet-4-6");
+        assert_eq!(payload["output_config"]["effort"], "medium");
+        assert_eq!(payload["thinking"]["type"], "adaptive");
+    }
+
+    #[test]
+    fn extracts_anthropic_text_after_thinking_blocks() {
+        let response = json!({
+            "content": [
+                {"type": "thinking", "thinking": "hidden summary"},
+                {"type": "text", "text": "{\"type\":\"final\",\"text\":\"ok\"}"}
+            ]
+        });
+
+        assert_eq!(
+            anthropic_response_text(&response).as_deref(),
             Some("{\"type\":\"final\",\"text\":\"ok\"}")
         );
     }

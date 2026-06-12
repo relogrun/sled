@@ -2,7 +2,8 @@ use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use sled_ai::{
-    ModelOptions, OpenAiReasoningEffort, Provider, create_model_with_options, default_model,
+    AnthropicEffort, AnthropicThinking, ModelOptions, OpenAiReasoningEffort, Provider,
+    create_model_with_options, default_model,
 };
 use sled_core::Fold;
 use sled_core::{
@@ -51,6 +52,10 @@ enum Command {
         model: Option<String>,
         #[arg(long = "openai-reasoning", help = "Save OpenAI reasoning effort")]
         openai_reasoning: Option<OpenAiReasoningEffort>,
+        #[arg(long = "anthropic-effort", help = "Save Anthropic effort")]
+        anthropic_effort: Option<AnthropicEffort>,
+        #[arg(long = "anthropic-thinking", help = "Save Anthropic thinking mode")]
+        anthropic_thinking: Option<AnthropicThinking>,
         #[arg(
             long = "openai-compatible-base-url",
             help = "Save base URL for openai-compatible providers"
@@ -85,6 +90,13 @@ enum Command {
             help = "OpenAI reasoning effort for this run"
         )]
         openai_reasoning: Option<OpenAiReasoningEffort>,
+        #[arg(long = "anthropic-effort", help = "Anthropic effort for this run")]
+        anthropic_effort: Option<AnthropicEffort>,
+        #[arg(
+            long = "anthropic-thinking",
+            help = "Anthropic thinking mode for this run"
+        )]
+        anthropic_thinking: Option<AnthropicThinking>,
         #[arg(
             long = "openai-compatible-base-url",
             help = "Base URL for openai-compatible providers"
@@ -125,7 +137,7 @@ struct DialogConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     openai: Option<OpenAiConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    anthropic: Option<ProviderModelConfig>,
+    anthropic: Option<AnthropicConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     openai_compatible: Option<OpenAiCompatibleConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -137,17 +149,21 @@ struct DialogConfig {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-struct ProviderModelConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct OpenAiConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct AnthropicConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thinking: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,6 +232,8 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             provider,
             model,
             openai_reasoning,
+            anthropic_effort,
+            anthropic_thinking,
             openai_compatible_base_url,
             all,
             recent_messages,
@@ -230,6 +248,8 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
                     provider,
                     model,
                     openai_reasoning,
+                    anthropic_effort,
+                    anthropic_thinking,
                     openai_compatible_base_url,
                     all,
                     recent_messages,
@@ -247,6 +267,8 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             provider,
             model,
             openai_reasoning,
+            anthropic_effort,
+            anthropic_thinking,
             openai_compatible_base_url,
             all,
             recent_messages,
@@ -258,6 +280,8 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
                 provider,
                 model,
                 openai_reasoning,
+                anthropic_effort,
+                anthropic_thinking,
                 openai_compatible_base_url,
                 all,
                 recent_messages,
@@ -289,6 +313,8 @@ struct RunOptions {
     provider: Provider,
     model: Option<String>,
     openai_reasoning_effort: Option<OpenAiReasoningEffort>,
+    anthropic_effort: Option<AnthropicEffort>,
+    anthropic_thinking: Option<AnthropicThinking>,
     openai_compatible_base_url: Option<String>,
     body_mirror: bool,
     fold_override: Option<Box<dyn Fold>>,
@@ -299,6 +325,8 @@ struct ResolvedDialogConfig {
     provider: Provider,
     model: Option<String>,
     openai_reasoning_effort: Option<OpenAiReasoningEffort>,
+    anthropic_effort: Option<AnthropicEffort>,
+    anthropic_thinking: Option<AnthropicThinking>,
     openai_compatible_base_url: Option<String>,
     recent_messages: Option<usize>,
     recent_bytes: Option<usize>,
@@ -310,6 +338,8 @@ struct DialogOptionOverrides {
     provider: Option<Provider>,
     model: Option<String>,
     openai_reasoning: Option<OpenAiReasoningEffort>,
+    anthropic_effort: Option<AnthropicEffort>,
+    anthropic_thinking: Option<AnthropicThinking>,
     openai_compatible_base_url: Option<String>,
     all: bool,
     recent_messages: Option<usize>,
@@ -324,6 +354,8 @@ async fn run_dialog(dir: &Path, profile: &Profile, options: RunOptions) -> Resul
             model: options.model,
             openai_compatible_base_url: options.openai_compatible_base_url,
             openai_reasoning_effort: options.openai_reasoning_effort,
+            anthropic_effort: options.anthropic_effort,
+            anthropic_thinking: options.anthropic_thinking,
             temperature: None,
         },
     )?;
@@ -359,6 +391,8 @@ fn resolve_dialog_config(
         model: provider_model(&config, provider)
             .or_else(|| default_model(provider).map(str::to_string)),
         openai_reasoning_effort: provider_openai_reasoning_effort(&config, provider)?,
+        anthropic_effort: provider_anthropic_effort(&config, provider)?,
+        anthropic_thinking: provider_anthropic_thinking(&config, provider)?,
         openai_compatible_base_url: config
             .openai_compatible
             .as_ref()
@@ -412,6 +446,8 @@ fn run_options_from_resolved_config(config: ResolvedDialogConfig) -> Result<RunO
         provider: config.provider,
         model: config.model,
         openai_reasoning_effort: config.openai_reasoning_effort,
+        anthropic_effort: config.anthropic_effort,
+        anthropic_thinking: config.anthropic_thinking,
         openai_compatible_base_url: config.openai_compatible_base_url,
         body_mirror: config.body_mirror,
         fold_override,
@@ -426,6 +462,8 @@ fn apply_dialog_option_overrides(
         provider,
         model,
         openai_reasoning,
+        anthropic_effort,
+        anthropic_thinking,
         openai_compatible_base_url,
         all,
         recent_messages,
@@ -442,6 +480,12 @@ fn apply_dialog_option_overrides(
     }
     if let Some(openai_reasoning) = openai_reasoning {
         set_provider_openai_reasoning(config, active_provider, openai_reasoning)?;
+    }
+    if let Some(anthropic_effort) = anthropic_effort {
+        set_provider_anthropic_effort(config, active_provider, anthropic_effort)?;
+    }
+    if let Some(anthropic_thinking) = anthropic_thinking {
+        set_provider_anthropic_thinking(config, active_provider, anthropic_thinking)?;
     }
     if let Some(openai_compatible_base_url) = openai_compatible_base_url {
         config
@@ -516,7 +560,7 @@ fn set_provider_model(config: &mut DialogConfig, provider: Provider, model: Stri
         Provider::Anthropic => {
             config
                 .anthropic
-                .get_or_insert_with(ProviderModelConfig::default)
+                .get_or_insert_with(AnthropicConfig::default)
                 .model = Some(model);
         }
         Provider::OpenAiCompatible => {
@@ -527,6 +571,86 @@ fn set_provider_model(config: &mut DialogConfig, provider: Provider, model: Stri
         }
         Provider::Operator => {
             anyhow::bail!("--model is not used with provider operator");
+        }
+    }
+    Ok(())
+}
+
+fn provider_anthropic_effort(
+    config: &DialogConfig,
+    provider: Provider,
+) -> Result<Option<AnthropicEffort>> {
+    match provider {
+        Provider::Anthropic => config
+            .anthropic
+            .as_ref()
+            .and_then(|config| config.effort.as_deref())
+            .map(str::parse)
+            .transpose(),
+        Provider::Operator | Provider::OpenAi | Provider::OpenAiCompatible => Ok(None),
+    }
+}
+
+fn provider_anthropic_thinking(
+    config: &DialogConfig,
+    provider: Provider,
+) -> Result<Option<AnthropicThinking>> {
+    match provider {
+        Provider::Anthropic => config
+            .anthropic
+            .as_ref()
+            .and_then(|config| config.thinking.as_deref())
+            .map(str::parse)
+            .transpose(),
+        Provider::Operator | Provider::OpenAi | Provider::OpenAiCompatible => Ok(None),
+    }
+}
+
+fn set_provider_anthropic_effort(
+    config: &mut DialogConfig,
+    provider: Provider,
+    effort: AnthropicEffort,
+) -> Result<()> {
+    match provider {
+        Provider::Anthropic => {
+            config
+                .anthropic
+                .get_or_insert_with(AnthropicConfig::default)
+                .effort = Some(effort.to_string());
+        }
+        Provider::Operator => {
+            anyhow::bail!("--anthropic-effort is not used with provider operator");
+        }
+        Provider::OpenAi => {
+            anyhow::bail!("--anthropic-effort is not used with provider openai");
+        }
+        Provider::OpenAiCompatible => {
+            anyhow::bail!("--anthropic-effort is not used with provider openai-compatible");
+        }
+    }
+    Ok(())
+}
+
+fn set_provider_anthropic_thinking(
+    config: &mut DialogConfig,
+    provider: Provider,
+    thinking: AnthropicThinking,
+) -> Result<()> {
+    match provider {
+        Provider::Anthropic => {
+            config
+                .anthropic
+                .get_or_insert_with(AnthropicConfig::default)
+                .thinking = Some(thinking.to_string());
+        }
+        Provider::Operator => {
+            anyhow::bail!("--anthropic-thinking is not used with provider operator");
+        }
+        Provider::OpenAi => {
+            anyhow::bail!("--anthropic-thinking is not used with provider openai");
+        }
+        Provider::OpenAiCompatible => {
+            anyhow::bail!("--anthropic-thinking is not used with provider openai-compatible");
         }
     }
     Ok(())
@@ -736,6 +860,34 @@ mod tests {
             err,
             "--openai-reasoning is not used with provider anthropic"
         );
+    }
+
+    #[test]
+    fn anthropic_options_are_saved_under_anthropic() {
+        let config = dialog_config_from_overrides(DialogOptionOverrides {
+            provider: Some(Provider::Anthropic),
+            anthropic_effort: Some(AnthropicEffort::Medium),
+            anthropic_thinking: Some(AnthropicThinking::Adaptive),
+            ..DialogOptionOverrides::default()
+        })
+        .unwrap();
+
+        let anthropic = config.anthropic.unwrap();
+        assert_eq!(anthropic.effort.as_deref(), Some("medium"));
+        assert_eq!(anthropic.thinking.as_deref(), Some("adaptive"));
+        assert!(config.openai.is_none());
+    }
+
+    #[test]
+    fn anthropic_options_are_anthropic_only() {
+        let err = dialog_config_from_overrides(DialogOptionOverrides {
+            anthropic_effort: Some(AnthropicEffort::Low),
+            ..DialogOptionOverrides::default()
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(err, "--anthropic-effort is not used with provider openai");
     }
 
     #[test]
