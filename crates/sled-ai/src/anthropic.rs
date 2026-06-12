@@ -1,0 +1,157 @@
+use crate::{
+    AnthropicEffort, AnthropicThinking, Provider, RequestDiagnostics, parse_reply,
+    send_model_request_with_retry,
+};
+use anyhow::{Result, anyhow};
+use async_trait::async_trait;
+use reqwest::Client;
+use serde_json::{Value, json};
+use sled_core::{Context, Model, Reply};
+use tracing::{debug, info};
+
+pub(crate) struct AnthropicModel {
+    client: Client,
+    api_key: String,
+    model: String,
+    effort: Option<AnthropicEffort>,
+    thinking: Option<AnthropicThinking>,
+    temperature: Option<f32>,
+}
+
+impl AnthropicModel {
+    pub(crate) fn new(
+        api_key: String,
+        model: String,
+        effort: Option<AnthropicEffort>,
+        thinking: Option<AnthropicThinking>,
+        temperature: Option<f32>,
+    ) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+            model,
+            effort,
+            thinking,
+            temperature,
+        }
+    }
+}
+
+#[async_trait]
+impl Model for AnthropicModel {
+    async fn complete(&self, system: &str, context: &Context) -> Result<Reply> {
+        info!(provider = "anthropic", model = %self.model, "sending model request");
+        debug!(
+            index_bytes = context.index.len(),
+            bodies_bytes = context.bodies.len(),
+            system_bytes = system.len(),
+            "model request context sizes"
+        );
+        let user = format!(
+            "Dialog index:\n{}\n\nOpened bodies:\n{}",
+            context.index, context.bodies
+        );
+        let mut payload =
+            anthropic_messages_payload(&self.model, system, &user, self.effort, self.thinking);
+        if let Some(temperature) = self.temperature {
+            payload["temperature"] = json!(temperature);
+        }
+        let diagnostics = RequestDiagnostics::new(
+            serde_json::to_vec(&payload)?.len(),
+            system.len(),
+            context.index.len(),
+            context.bodies.len(),
+            self.api_key.len() + "2023-06-01".len(),
+        );
+        let response: Value =
+            send_model_request_with_retry(Provider::Anthropic, &self.model, diagnostics, || {
+                self.client
+                    .post("https://api.anthropic.com/v1/messages")
+                    .header("x-api-key", &self.api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .json(&payload)
+            })
+            .await?
+            .json()
+            .await?;
+
+        info!(provider = "anthropic", model = %self.model, "received model response");
+        let text = anthropic_response_text(&response)
+            .ok_or_else(|| anyhow!("empty Anthropic response: {response}"))?;
+        parse_reply(&text)
+    }
+}
+
+fn anthropic_messages_payload(
+    model: &str,
+    system: &str,
+    user: &str,
+    effort: Option<AnthropicEffort>,
+    thinking: Option<AnthropicThinking>,
+) -> Value {
+    let mut payload = json!({
+        "model": model,
+        "max_tokens": 4096,
+        "system": system,
+        "messages": [{"role": "user", "content": user}]
+    });
+    if let Some(effort) = effort {
+        payload["output_config"] = json!({ "effort": effort.to_string() });
+    }
+    if thinking == Some(AnthropicThinking::Adaptive) {
+        payload["thinking"] = json!({ "type": "adaptive" });
+    }
+    payload
+}
+
+fn anthropic_response_text(response: &Value) -> Option<String> {
+    let mut texts = Vec::new();
+    for content in response["content"].as_array()? {
+        if content["type"].as_str().is_some_and(|kind| kind == "text") {
+            if let Some(text) = content["text"].as_str() {
+                texts.push(text);
+            }
+        }
+    }
+    let text = texts.join("\n");
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_anthropic_payload_with_effort_and_adaptive_thinking() {
+        let payload = anthropic_messages_payload(
+            "claude-sonnet-4-6",
+            "system prompt",
+            "user context",
+            Some(AnthropicEffort::Medium),
+            Some(AnthropicThinking::Adaptive),
+        );
+
+        assert_eq!(payload["model"], "claude-sonnet-4-6");
+        assert_eq!(payload["output_config"]["effort"], "medium");
+        assert_eq!(payload["thinking"]["type"], "adaptive");
+    }
+
+    #[test]
+    fn extracts_anthropic_text_after_thinking_blocks() {
+        let response = json!({
+            "content": [
+                {"type": "thinking", "thinking": "hidden summary"},
+                {"type": "text", "text": "{\"type\":\"final\",\"text\":\"ok\"}"}
+            ]
+        });
+
+        assert_eq!(
+            anthropic_response_text(&response).as_deref(),
+            Some("{\"type\":\"final\",\"text\":\"ok\"}")
+        );
+    }
+}
