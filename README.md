@@ -14,7 +14,7 @@ Each filled message is a JSON5 file named by slot, role, and status:
 0001.user.done.json5       # user message, closed
 0002.assistant.done.json5  # assistant message, closed
 0003.tool.pending.json5    # tool call waiting for the runner
-0004.tool.awaiting.json5   # suspended tool waiting for human input
+0004.tool.awaiting.json5   # suspended tool awaiting input from you
 ```
 
 ### Guarantees
@@ -94,13 +94,13 @@ cargo run -p sled-cli -- say ./runs/example "Use option A." --run
 Open slots and filled messages use these filename shapes:
 
 ```text
-0002.running.json5              # model turn, role not known yet
-0001.user.done.json5            # user message
-0002.assistant.done.json5       # assistant message
-0003.tool.pending.json5         # tool call waiting for the runner
-0003.tool.done.json5            # completed tool call
-0004.user.awaiting.json5     # dialog waits for the next user message
-0004.tool.awaiting.json5     # suspended tool waits for a human answer
+0002.running.json5          # model turn, role not known yet
+0001.user.done.json5        # user message, closed
+0002.assistant.done.json5   # assistant message, closed
+0003.tool.pending.json5     # tool call awaiting the runner
+0003.tool.done.json5        # tool call completed by the runner
+0004.tool.awaiting.json5    # suspended tool awaiting input from you
+0005.user.awaiting.json5    # dialog awaiting your next message
 ```
 
 An open model turn is roleless because the model may write either an assistant message or a tool call. Once content is written, the role never changes.
