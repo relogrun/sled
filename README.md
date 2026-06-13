@@ -11,10 +11,10 @@ It is built for direct, hands-on work with models when you want to inspect, edit
 Each filled message is a JSON5 file named by slot, role, and status:
 
 ```text
-0001.user.done.json5
-0002.assistant.done.json5
-0003.tool.pending.json5
-0004.tool.awaiting.json5
+0001.user.done.json5       # user message, closed
+0002.assistant.done.json5  # assistant message, closed
+0003.tool.pending.json5    # tool call waiting for the runner
+0004.tool.awaiting.json5   # suspended tool waiting for human input
 ```
 
 ### Guarantees
@@ -104,13 +104,6 @@ Open slots and filled messages use these filename shapes:
 ```
 
 An open model turn is roleless because the model may write either an assistant message or a tool call. Once content is written, the role never changes.
-
-The status names who must act:
-
-- `running` — the model is taking its turn
-- `pending` — the runner must finish a tool call
-- `awaiting` — you must reply, either to the dialog or to a suspended tool
-- `done` — closed
 
 ## Commands
 
