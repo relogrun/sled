@@ -14,12 +14,12 @@ Each filled message is a JSON5 file named by slot, role, and status:
 0001.user.done.json5
 0002.assistant.done.json5
 0003.tool.pending.json5
-0004.tool.needs-input.json5
+0004.tool.awaiting.json5
 ```
 
 ### Guarantees
 
-- At most one non-terminal file may exist: `running`, `pending`, or `needs-input`. If the runner sees more than one, it exits with an error and touches nothing.
+- At most one non-terminal file may exist: `running`, `pending`, or `awaiting`. If the runner sees more than one, it exits with an error and touches nothing.
 - Content is durably written before status changes. A status change is a single atomic `rename`.
 - A crash between write and rename is recoverable. The next `run` completes the visible old-status file.
 - A pending tool with no result or suspension may be executed again after a crash. Side-effectful tools must be idempotent.
@@ -76,7 +76,7 @@ Inspect the exact context sent to the model:
 cargo run -p sled-cli -- context ./runs/example
 ```
 
-When a run stops at `needs-input`, answer with `say` and continue with `run`:
+When a run stops at `awaiting`, answer with `say` and continue with `run`:
 
 ```bash
 cargo run -p sled-cli -- say ./runs/example "Use option A."
@@ -99,8 +99,8 @@ Open slots and filled messages use these filename shapes:
 0002.assistant.done.json5       # assistant message
 0003.tool.pending.json5         # tool call waiting for the runner
 0003.tool.done.json5            # completed tool call
-0004.user.needs-input.json5     # dialog waits for the next user message
-0004.tool.needs-input.json5     # suspended tool waits for a human answer
+0004.user.awaiting.json5     # dialog waits for the next user message
+0004.tool.awaiting.json5     # suspended tool waits for a human answer
 ```
 
 An open model turn is roleless because the model may write either an assistant message or a tool call. Once content is written, the role never changes.
@@ -109,7 +109,7 @@ The status names who must act:
 
 - `running` — the model is taking its turn
 - `pending` — the runner must finish a tool call
-- `needs-input` — you must reply, either to the dialog or to a suspended tool
+- `awaiting` — you must reply, either to the dialog or to a suspended tool
 - `done` — closed
 
 ## Commands
@@ -119,10 +119,10 @@ Use `cargo run -p sled-cli -- <command>` during development.
 - `init <dir>` — create the dialog directory and `_system.json5`. Optional.
   - `--system <text>` to set custom system instructions.
   - `--system-file <path>` to read custom system instructions from a file.
-- `say <dir> <text>` — send text to whoever is waiting. With no open file, it creates a user message. With `user.needs-input`, it fills a user reply. With `tool.needs-input`, it writes the suspended tool result.
+- `say <dir> <text>` — send text to whoever is waiting. With no open file, it creates a user message. With `user.awaiting`, it fills a user reply. With `tool.awaiting`, it writes the suspended tool result.
   - `--run` to start the runner immediately after writing the message, using the same config/defaults as `run`.
   - `--body-mirror` to save markdown body mirrors as enabled. Default: off.
-- `run <dir>` — continue execution until done, needs-input, or error.
+- `run <dir>` — continue execution until done, awaiting, or error.
   - `--provider <operator|openai|openai-compatible|anthropic>` to set the provider. Default: `openai`.
   - `--model <model>` to set the selected provider's model. Defaults: `openai=gpt-5.4-mini` and `anthropic=claude-sonnet-4-6`. `openai-compatible` requires one.
   - `--openai-reasoning <minimal|low|medium|high>` to set OpenAI reasoning effort for this run.
@@ -244,16 +244,16 @@ Built-in sled protocol prompts are always included. `_system.json5` only appends
 
 Tool files are executed sequentially by the runner: one `tool.pending` file at a time, in slot order. A model turn can request one tool call. A single tool call may still batch work internally — the protocol prompt instructs the model to put one batched request (several paths, several URLs) into one tool call whenever the next step does not depend on each intermediate result, so a sequential protocol does not mean one file per item.
 
-Each tool request and its result live in the same file. A completed tool is renamed from `tool.pending` to `tool.done`. A suspending tool writes a request for human input and becomes `tool.needs-input`. Then `say` or a manual edit writes the result, and the same file becomes `tool.done`.
+Each tool request and its result live in the same file. A completed tool is renamed from `tool.pending` to `tool.done`. A suspending tool writes a request for human input and becomes `tool.awaiting`. Then `say` or a manual edit writes the result, and the same file becomes `tool.done`.
 
 Built-in tools:
 
 - `open`: open older message bodies by slot number.
 - `read`: read local filesystem files.
 - `http_get`: fetch HTTP/HTTPS URLs with timeout and response-size limits. Redirects are not followed, and local/private IP targets are rejected.
-- `escalate`: ask the human for input when the model cannot continue without a decision or answer. This suspends the tool call as `tool.needs-input`.
+- `escalate`: ask the human for input when the model cannot continue without a decision or answer. This suspends the tool call as `tool.awaiting`.
 
-`user.needs-input` and `tool.needs-input` are different handoffs. A `user.needs-input` file asks for the next user message in the dialog. A `tool.needs-input` file belongs to an already-started tool call. When you answer it with `say`, sled writes a tool `result`, closes the same file as `tool.done`, and the model continues from that result.
+`user.awaiting` and `tool.awaiting` are different handoffs. A `user.awaiting` file asks for the next user message in the dialog. A `tool.awaiting` file belongs to an already-started tool call. When you answer it with `say`, sled writes a tool `result`, closes the same file as `tool.done`, and the model continues from that result.
 
 `read` intentionally has no path sandbox. sled is built for a trusted, single-user local workspace where the person running the tool controls the files it can inspect.
 

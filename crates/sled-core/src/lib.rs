@@ -19,7 +19,7 @@ const DEFAULT_SYSTEM_PROMPT: &str = concat!(
 pub enum Status {
     Running,
     Pending,
-    NeedsInput,
+    Awaiting,
     Done,
 }
 
@@ -28,7 +28,7 @@ impl Status {
         match self {
             Status::Running => "running",
             Status::Pending => "pending",
-            Status::NeedsInput => "needs-input",
+            Status::Awaiting => "awaiting",
             Status::Done => "done",
         }
     }
@@ -37,7 +37,7 @@ impl Status {
         Some(match s {
             "running" => Self::Running,
             "pending" => Self::Pending,
-            "needs-input" => Self::NeedsInput,
+            "awaiting" => Self::Awaiting,
             "done" => Self::Done,
             _ => return None,
         })
@@ -162,7 +162,7 @@ impl ToolResult {
 #[derive(Clone, Debug)]
 pub enum StepOutcome {
     Continue,
-    NeedsInput(PathBuf),
+    Awaiting(PathBuf),
     Finished(Option<u32>),
 }
 
@@ -370,7 +370,7 @@ fn role_for_path(msg: &Message, status: Status, fallback: Option<&str>) -> Optio
     }
     match status {
         Status::Running => None,
-        Status::NeedsInput => Some("user".into()),
+        Status::Awaiting => Some("user".into()),
         Status::Pending => Some("tool".into()),
         Status::Done => Some("unknown".into()),
     }
@@ -540,16 +540,16 @@ pub async fn step_with_options(
     let Some(slot) = open else {
         match slots.last() {
             None => {
-                info!(dir = %dir.display(), "empty dialog, creating initial needs-input slot");
+                info!(dir = %dir.display(), "empty dialog, creating initial awaiting slot");
                 write_default_system_config(dir)?;
                 let path = create_slot_with_options(
                     dir,
                     1,
-                    Status::NeedsInput,
+                    Status::Awaiting,
                     &Message::default(),
                     write_options,
                 )?;
-                return Ok(StepOutcome::NeedsInput(path));
+                return Ok(StepOutcome::Awaiting(path));
             }
             Some(last) => {
                 let msg = read_message(&last.path)?;
@@ -575,15 +575,15 @@ pub async fn step_with_options(
     };
 
     match slot.status {
-        Status::NeedsInput => {
+        Status::Awaiting => {
             let msg = read_message(&slot.path).unwrap_or_default();
-            if is_filled_user_needs_input(slot, &msg) || is_completed_tool_needs_input(slot, &msg) {
-                info!(slot = slot.num, "recovering filled needs-input slot");
+            if is_filled_user_awaiting(slot, &msg) || is_completed_tool_awaiting(slot, &msg) {
+                info!(slot = slot.num, "recovering filled awaiting slot");
                 set_status(dir, slot, Status::Done)?;
                 return Ok(StepOutcome::Continue);
             }
             info!(slot = slot.num, path = %slot.path.display(), "user input requested");
-            Ok(StepOutcome::NeedsInput(slot.path.clone()))
+            Ok(StepOutcome::Awaiting(slot.path.clone()))
         }
         Status::Pending => {
             info!(slot = slot.num, "processing pending tool slot");
@@ -595,8 +595,8 @@ pub async fn step_with_options(
             }
             if msg.suspension.is_some() {
                 info!(slot = slot.num, "recovering suspended pending tool slot");
-                let path = set_status(dir, slot, Status::NeedsInput)?;
-                return Ok(StepOutcome::NeedsInput(path));
+                let path = set_status(dir, slot, Status::Awaiting)?;
+                return Ok(StepOutcome::Awaiting(path));
             }
             let call = msg
                 .call
@@ -612,8 +612,8 @@ pub async fn step_with_options(
                 ToolResult::Suspended(request) => {
                     msg.suspension = Some(ToolSuspension { request });
                     write_message_with_options(&slot.path, &msg, write_options)?;
-                    let path = set_status(dir, slot, Status::NeedsInput)?;
-                    Ok(StepOutcome::NeedsInput(path))
+                    let path = set_status(dir, slot, Status::Awaiting)?;
+                    Ok(StepOutcome::Awaiting(path))
                 }
             }
         }
@@ -658,7 +658,7 @@ pub async fn step_with_options(
                         create_slot_with_options(
                             dir,
                             slot.num + 1,
-                            Status::NeedsInput,
+                            Status::Awaiting,
                             &Message::default(),
                             write_options,
                         )?;
@@ -723,7 +723,7 @@ pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> 
     let open = validate_single_open(&slots)?;
 
     if let Some(slot) = open {
-        if slot.status != Status::NeedsInput {
+        if slot.status != Status::Awaiting {
             warn!(
                 active = %slot.path.display(),
                 "cannot add user message while another slot is active"
@@ -734,10 +734,10 @@ pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> 
             );
         }
         let mut existing = read_message(&slot.path).unwrap_or_default();
-        if is_tool_needs_input(slot, &existing) {
+        if is_tool_awaiting(slot, &existing) {
             if existing.suspension.is_none() {
                 bail!(
-                    "cannot answer tool needs-input without suspension: {}",
+                    "cannot answer tool awaiting without suspension: {}",
                     slot.path.display()
                 );
             }
@@ -770,20 +770,20 @@ pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> 
     )
 }
 
-fn is_tool_needs_input(slot: &Slot, msg: &Message) -> bool {
-    slot.status == Status::NeedsInput
+fn is_tool_awaiting(slot: &Slot, msg: &Message) -> bool {
+    slot.status == Status::Awaiting
         && (msg.role == "tool" || slot.role.as_deref() == Some("tool"))
         && msg.filled()
 }
 
-fn is_completed_tool_needs_input(slot: &Slot, msg: &Message) -> bool {
-    slot.status == Status::NeedsInput
+fn is_completed_tool_awaiting(slot: &Slot, msg: &Message) -> bool {
+    slot.status == Status::Awaiting
         && (msg.role == "tool" || slot.role.as_deref() == Some("tool"))
         && msg.result.is_some()
 }
 
-fn is_filled_user_needs_input(slot: &Slot, msg: &Message) -> bool {
-    slot.status == Status::NeedsInput
+fn is_filled_user_awaiting(slot: &Slot, msg: &Message) -> bool {
+    slot.status == Status::Awaiting
         && (msg.role == "user" || slot.role.as_deref() == Some("user"))
         && !msg.body.is_empty()
 }
@@ -934,13 +934,10 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
 
         let running = create_slot(&dir, 1, Status::Running, &Message::default()).unwrap();
-        let needs_input = create_slot(&dir, 2, Status::NeedsInput, &Message::default()).unwrap();
+        let awaiting = create_slot(&dir, 2, Status::Awaiting, &Message::default()).unwrap();
 
         assert_eq!(running.file_name().unwrap(), "0001.running.json5");
-        assert_eq!(
-            needs_input.file_name().unwrap(),
-            "0002.user.needs-input.json5"
-        );
+        assert_eq!(awaiting.file_name().unwrap(), "0002.user.awaiting.json5");
     }
 
     #[test]
@@ -981,18 +978,18 @@ mod tests {
     fn rejects_two_open_slots() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
-        create_slot(&dir, 1, Status::NeedsInput, &Message::default()).unwrap();
+        create_slot(&dir, 1, Status::Awaiting, &Message::default()).unwrap();
         create_slot(&dir, 2, Status::Pending, &Message::default()).unwrap();
         let slots = scan(&dir).unwrap();
         assert!(validate_single_open(&slots).is_err());
     }
 
-    fn create_two_needs_input_slots(dir: &Path) {
+    fn create_two_awaiting_slots(dir: &Path) {
         fs::create_dir_all(dir).unwrap();
         create_slot(
             dir,
             1,
-            Status::NeedsInput,
+            Status::Awaiting,
             &Message {
                 role: "user".into(),
                 summary: "user input".into(),
@@ -1003,7 +1000,7 @@ mod tests {
         create_slot(
             dir,
             2,
-            Status::NeedsInput,
+            Status::Awaiting,
             &Message {
                 role: "tool".into(),
                 summary: "tool input".into(),
@@ -1021,18 +1018,18 @@ mod tests {
     }
 
     #[test]
-    fn say_rejects_two_needs_input_slots() {
+    fn say_rejects_two_awaiting_slots() {
         let dir = temp_dir();
-        create_two_needs_input_slots(&dir);
+        create_two_awaiting_slots(&dir);
 
         let err = say(&dir, "answer").unwrap_err().to_string();
         assert!(err.contains("more than one non-terminal file"));
     }
 
     #[tokio::test]
-    async fn runner_rejects_two_needs_input_slots() {
+    async fn runner_rejects_two_awaiting_slots() {
         let dir = temp_dir();
-        create_two_needs_input_slots(&dir);
+        create_two_awaiting_slots(&dir);
 
         let err = step(&dir, &NoopModel, &PanicTools, &NoopFold)
             .await
@@ -1160,7 +1157,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_tool_can_suspend_into_tool_needs_input() {
+    async fn pending_tool_can_suspend_into_tool_awaiting() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
         create_slot(
@@ -1182,13 +1179,13 @@ mod tests {
         let outcome = step(&dir, &NoopModel, &SuspendTools, &NoopFold)
             .await
             .unwrap();
-        assert!(matches!(outcome, StepOutcome::NeedsInput(_)));
+        assert!(matches!(outcome, StepOutcome::Awaiting(_)));
 
         let slots = scan(&dir).unwrap();
-        assert_eq!(slots[0].status, Status::NeedsInput);
+        assert_eq!(slots[0].status, Status::Awaiting);
         assert_eq!(
             slots[0].path.file_name().unwrap(),
-            "0001.tool.needs-input.json5"
+            "0001.tool.awaiting.json5"
         );
         let msg = read_message(&slots[0].path).unwrap();
         let suspension = msg.suspension.unwrap();
@@ -1197,7 +1194,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_tool_with_suspension_recovers_to_needs_input_without_reexecution() {
+    async fn pending_tool_with_suspension_recovers_to_awaiting_without_reexecution() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
         create_slot(
@@ -1222,24 +1219,24 @@ mod tests {
         let outcome = step(&dir, &NoopModel, &PanicTools, &NoopFold)
             .await
             .unwrap();
-        assert!(matches!(outcome, StepOutcome::NeedsInput(_)));
+        assert!(matches!(outcome, StepOutcome::Awaiting(_)));
 
         let slots = scan(&dir).unwrap();
-        assert_eq!(slots[0].status, Status::NeedsInput);
+        assert_eq!(slots[0].status, Status::Awaiting);
         assert_eq!(
             slots[0].path.file_name().unwrap(),
-            "0001.tool.needs-input.json5"
+            "0001.tool.awaiting.json5"
         );
     }
 
     #[tokio::test]
-    async fn filled_user_needs_input_recovers_to_done() {
+    async fn filled_user_awaiting_recovers_to_done() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
         create_slot(
             &dir,
             1,
-            Status::NeedsInput,
+            Status::Awaiting,
             &Message {
                 role: "user".into(),
                 summary: "hello".into(),
@@ -1260,13 +1257,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_tool_needs_input_recovers_to_done() {
+    async fn completed_tool_awaiting_recovers_to_done() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
         create_slot(
             &dir,
             1,
-            Status::NeedsInput,
+            Status::Awaiting,
             &Message {
                 role: "tool".into(),
                 summary: "ask".into(),
@@ -1296,13 +1293,13 @@ mod tests {
     }
 
     #[test]
-    fn say_answers_suspended_tool_needs_input() {
+    fn say_answers_suspended_tool_awaiting() {
         let dir = temp_dir();
         fs::create_dir_all(&dir).unwrap();
         create_slot(
             &dir,
             1,
-            Status::NeedsInput,
+            Status::Awaiting,
             &Message {
                 role: "tool".into(),
                 summary: "ask".into(),

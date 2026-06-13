@@ -53,7 +53,7 @@ or:
 {
   "type": "tool",
   "text": "",
-  "summary": "need human input",
+  "summary": "request human input",
   "wait_user": false,
   "tool": "escalate",
   "args_json": "{\"reason\":\"I need a human decision before continuing.\"}"
