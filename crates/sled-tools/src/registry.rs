@@ -4,10 +4,12 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use sled_core::{Call, Slot, ToolExecutor, ToolResult};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 #[derive(Clone, Debug)]
 pub struct ToolContext {
+    pub dialog_dir: PathBuf,
     pub slots: Vec<Slot>,
 }
 
@@ -57,8 +59,9 @@ impl ToolRegistry {
 
 #[async_trait]
 impl ToolExecutor for ToolRegistry {
-    async fn execute(&self, slots: &[Slot], call: &Call) -> Result<ToolResult> {
+    async fn execute(&self, dialog_dir: &Path, slots: &[Slot], call: &Call) -> Result<ToolResult> {
         let ctx = ToolContext {
+            dialog_dir: dialog_dir.to_path_buf(),
             slots: slots.to_vec(),
         };
         self.execute(&ctx, call).await
@@ -73,7 +76,10 @@ mod tests {
     #[tokio::test]
     async fn defaults_include_escalate_as_suspending_tool() {
         let registry = ToolRegistry::with_defaults();
-        let ctx = ToolContext { slots: Vec::new() };
+        let ctx = ToolContext {
+            dialog_dir: "dialog".into(),
+            slots: Vec::new(),
+        };
         let result = registry
             .execute(
                 &ctx,
@@ -91,6 +97,45 @@ mod tests {
                 "ok": true,
                 "tool": "escalate",
                 "reason": "need a decision"
+            }))
+        );
+    }
+
+    struct DialogDirTool;
+
+    #[async_trait]
+    impl Tool for DialogDirTool {
+        fn name(&self) -> &'static str {
+            "dialog_dir"
+        }
+
+        async fn execute(&self, ctx: &ToolContext, _args: Value) -> Result<ToolResult> {
+            Ok(ToolResult::completed(json!({
+                "dialog_dir": ctx.dialog_dir,
+            })))
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_executor_context_includes_dialog_dir() {
+        let mut registry = ToolRegistry::new();
+        registry.register(DialogDirTool);
+        let result = <ToolRegistry as ToolExecutor>::execute(
+            &registry,
+            Path::new("runs/example/dialog"),
+            &[],
+            &Call {
+                tool: "dialog_dir".into(),
+                args: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            result,
+            ToolResult::completed(json!({
+                "dialog_dir": "runs/example/dialog",
             }))
         );
     }

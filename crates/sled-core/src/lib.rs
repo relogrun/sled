@@ -140,7 +140,7 @@ pub trait Model: Send + Sync {
 
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
-    async fn execute(&self, slots: &[Slot], call: &Call) -> Result<ToolResult>;
+    async fn execute(&self, dialog_dir: &Path, slots: &[Slot], call: &Call) -> Result<ToolResult>;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -602,7 +602,7 @@ pub async fn step_with_options(
                 .call
                 .clone()
                 .ok_or_else(|| anyhow!("pending slot without call: {}", slot.path.display()))?;
-            match tools.execute(&slots, &call).await? {
+            match tools.execute(dir, &slots, &call).await? {
                 ToolResult::Completed(result) => {
                     msg.result = Some(result);
                     write_message_with_options(&slot.path, &msg, write_options)?;
@@ -869,7 +869,12 @@ mod tests {
 
     #[async_trait]
     impl ToolExecutor for FakeTools {
-        async fn execute(&self, _slots: &[Slot], call: &Call) -> Result<ToolResult> {
+        async fn execute(
+            &self,
+            _dialog_dir: &Path,
+            _slots: &[Slot],
+            call: &Call,
+        ) -> Result<ToolResult> {
             Ok(ToolResult::completed(
                 json!({"ok": true, "tool": call.tool}),
             ))
@@ -880,7 +885,12 @@ mod tests {
 
     #[async_trait]
     impl ToolExecutor for PanicTools {
-        async fn execute(&self, _slots: &[Slot], _call: &Call) -> Result<ToolResult> {
+        async fn execute(
+            &self,
+            _dialog_dir: &Path,
+            _slots: &[Slot],
+            _call: &Call,
+        ) -> Result<ToolResult> {
             unreachable!("tool should not be executed")
         }
     }
@@ -889,7 +899,12 @@ mod tests {
 
     #[async_trait]
     impl ToolExecutor for SuspendTools {
-        async fn execute(&self, _slots: &[Slot], call: &Call) -> Result<ToolResult> {
+        async fn execute(
+            &self,
+            _dialog_dir: &Path,
+            _slots: &[Slot],
+            call: &Call,
+        ) -> Result<ToolResult> {
             Ok(ToolResult::suspended(json!({
                 "tool": call.tool,
                 "prompt": "answer required"
