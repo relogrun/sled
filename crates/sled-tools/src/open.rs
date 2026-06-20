@@ -12,6 +12,12 @@ impl Tool for OpenTool {
         "open"
     }
 
+    fn description(&self) -> Option<&'static str> {
+        Some(
+            "Open older dialog message bodies by slot number. Args: {\"slots\":[1,2]}. Use this when the index references a message whose body is not currently included in context.",
+        )
+    }
+
     async fn execute(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult> {
         let nums = args["slots"].as_array().cloned().unwrap_or_default();
         let sections: Vec<Value> = nums

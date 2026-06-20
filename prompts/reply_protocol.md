@@ -20,45 +20,12 @@ Tool call:
 {
   "type": "tool",
   "text": "",
-  "summary": "requested older messages",
+  "summary": "short tool-call summary",
   "wait_user": false,
-  "tool": "open",
-  "args_json": "{\"slots\":[1,2]}"
+  "tool": "tool_name",
+  "args_json": "{\"key\":\"value\"}"
 }
 
-or:
-
-{
-  "type": "tool",
-  "text": "",
-  "summary": "read files",
-  "wait_user": false,
-  "tool": "read",
-  "args_json": "{\"paths\":[\"Cargo.toml\"]}"
-}
-
-or:
-
-{
-  "type": "tool",
-  "text": "",
-  "summary": "fetch URLs",
-  "wait_user": false,
-  "tool": "http_get",
-  "args_json": "{\"urls\":[\"https://example.com\"],\"max_bytes\":200000}"
-}
-
-or:
-
-{
-  "type": "tool",
-  "text": "",
-  "summary": "request human input",
-  "wait_user": false,
-  "tool": "escalate",
-  "args_json": "{\"reason\":\"I need a human decision before continuing.\"}"
-}
-
-The `open` tool opens older message bodies by slot number. The `read` tool reads filesystem files in batches. The `http_get` tool fetches HTTP/HTTPS URLs in batches. The `escalate` tool suspends the tool call and asks the human for input. Request multiple independent files or URLs in one tool call.
+Use only tool names described in the available tools section. Follow the selected tool's argument contract exactly. Request multiple independent items in one tool call when the tool description supports batching and the next step does not depend on each intermediate result.
 
 For tool calls, put the tool arguments in `args_json` as a JSON object encoded inside a string. Do not emit an `args` object.

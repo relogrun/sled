@@ -33,6 +33,12 @@ impl Tool for HttpGetTool {
         "http_get"
     }
 
+    fn description(&self) -> Option<&'static str> {
+        Some(
+            "Fetch public HTTP/HTTPS URLs. Args: {\"urls\":[\"https://example.com\"],\"max_bytes\":200000,\"timeout_ms\":10000}. Local/private hosts and unsupported schemes are rejected. Batch independent URLs in one call.",
+        )
+    }
+
     async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<ToolResult> {
         let urls = parse_urls(&args);
         let max_bytes = args["max_bytes"]

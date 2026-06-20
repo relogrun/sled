@@ -7,8 +7,9 @@ use sled_ai::{
 };
 use sled_core::Fold;
 use sled_core::{
-    StepOutcome, WriteOptions, durable_write, preview_model_input, run_until_stop_with_options,
-    say_with_options, status_report, write_default_system_config, write_system_prompt,
+    StepOutcome, SystemPromptFragments, WriteOptions, durable_write, preview_model_input,
+    run_until_stop_with_options_and_fragments, say_with_options, status_report,
+    write_default_system_config, write_system_prompt,
 };
 use sled_fold::{AllFold, RecentBytesFold, RecentMessagesFold};
 use sled_tools::ToolRegistry;
@@ -299,10 +300,11 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             let (config, _) = read_resolved_dialog_config(&dir, DialogOptionOverrides::default())?;
             let fold_override = build_fold_override(&config)?;
             let fold = selected_fold(&profile, fold_override.as_deref());
-            let (system, context) = preview_model_input(&dir, fold)?;
-            println!("=== system ===\n{}\n", system);
-            println!("=== index ===\n{}", context.index);
-            println!("=== bodies ===\n{}", context.bodies);
+            let system_fragments = system_prompt_fragments(&profile);
+            let input = preview_model_input(&dir, fold, &system_fragments)?;
+            println!("=== system ===\n{}\n", input.system);
+            println!("=== index ===\n{}", input.context.index);
+            println!("=== bodies ===\n{}", input.context.bodies);
         }
     }
 
@@ -360,7 +362,8 @@ async fn run_dialog(dir: &Path, profile: &Profile, options: RunOptions) -> Resul
         },
     )?;
     let fold = selected_fold(profile, options.fold_override.as_deref());
-    match run_until_stop_with_options(
+    let system_fragments = system_prompt_fragments(profile);
+    match run_until_stop_with_options_and_fragments(
         dir,
         model.as_ref(),
         &profile.tools,
@@ -368,6 +371,7 @@ async fn run_dialog(dir: &Path, profile: &Profile, options: RunOptions) -> Resul
         WriteOptions {
             body_mirror: options.body_mirror,
         },
+        &system_fragments,
     )
     .await?
     {
@@ -377,6 +381,10 @@ async fn run_dialog(dir: &Path, profile: &Profile, options: RunOptions) -> Resul
         StepOutcome::Continue => unreachable!(),
     }
     Ok(())
+}
+
+fn system_prompt_fragments(profile: &Profile) -> SystemPromptFragments {
+    SystemPromptFragments::new(profile.tools.tool_descriptions_prompt())
 }
 
 fn resolve_dialog_config(

@@ -105,10 +105,27 @@ pub struct SystemConfig {
     pub prompt: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SystemPromptFragments {
+    available_tools: Option<String>,
+}
+
+impl SystemPromptFragments {
+    pub fn new(available_tools: Option<String>) -> Self {
+        Self { available_tools }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Context {
     pub index: String,
     pub bodies: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelInput {
+    pub system: String,
+    pub context: Context,
 }
 
 pub trait Fold: Send + Sync {
@@ -454,30 +471,27 @@ pub fn validate_single_open(slots: &[Slot]) -> Result<Option<&Slot>> {
     Ok(open.first().copied())
 }
 
-pub fn preview_model_input(dir: &Path, fold: &dyn Fold) -> Result<(String, Context)> {
+pub fn assemble_model_input_from_slots(
+    dir: &Path,
+    slots: &[Slot],
+    fold: &dyn Fold,
+    system_fragments: &SystemPromptFragments,
+) -> Result<ModelInput> {
     let system_config = read_system_config(dir)?;
-    let mut slots = scan(dir)?;
+    Ok(ModelInput {
+        system: resolve_system_prompt(&system_config, system_fragments),
+        context: fold.assemble(slots)?,
+    })
+}
+
+pub fn preview_model_input(
+    dir: &Path,
+    fold: &dyn Fold,
+    system_fragments: &SystemPromptFragments,
+) -> Result<ModelInput> {
+    let slots = scan(dir)?;
     validate_single_open(&slots)?;
-
-    if slots.iter().all(|slot| slot.status.terminal())
-        && let Some(last) = slots.last()
-    {
-        let msg = read_message(&last.path).unwrap_or_default();
-        let role = message_or_slot_role(&msg, last);
-        if role == "user" || role == "tool" {
-            slots.push(Slot {
-                num: last.num + 1,
-                role: None,
-                status: Status::Running,
-                path: slot_path(dir, last.num + 1, None, Status::Running),
-            });
-        }
-    }
-
-    Ok((
-        resolve_system_prompt(&system_config),
-        fold.assemble(&slots)?,
-    ))
+    assemble_model_input_from_slots(dir, &slots, fold, system_fragments)
 }
 
 fn empty_as<'a>(value: &'a str, fallback: &'a str) -> &'a str {
@@ -531,9 +545,27 @@ pub async fn step_with_options(
     fold: &dyn Fold,
     write_options: WriteOptions,
 ) -> Result<StepOutcome> {
+    step_with_options_and_fragments(
+        dir,
+        model,
+        tools,
+        fold,
+        write_options,
+        &SystemPromptFragments::default(),
+    )
+    .await
+}
+
+pub async fn step_with_options_and_fragments(
+    dir: &Path,
+    model: &dyn Model,
+    tools: &dyn ToolExecutor,
+    fold: &dyn Fold,
+    write_options: WriteOptions,
+    system_fragments: &SystemPromptFragments,
+) -> Result<StepOutcome> {
     debug!(dir = %dir.display(), "runner step start");
     fs::create_dir_all(dir)?;
-    let system_config = read_system_config(dir)?;
     let slots = scan(dir)?;
     let open = validate_single_open(&slots)?;
 
@@ -631,9 +663,8 @@ pub async fn step_with_options(
                 return Ok(StepOutcome::Continue);
             }
 
-            let context = fold.assemble(&slots)?;
-            let system = resolve_system_prompt(&system_config);
-            match model.complete(&system, &context).await? {
+            let input = assemble_model_input_from_slots(dir, &slots, fold, system_fragments)?;
+            match model.complete(&input.system, &input.context).await? {
                 Reply::Final {
                     text,
                     summary,
@@ -702,9 +733,37 @@ pub async fn run_until_stop_with_options(
     fold: &dyn Fold,
     write_options: WriteOptions,
 ) -> Result<StepOutcome> {
+    run_until_stop_with_options_and_fragments(
+        dir,
+        model,
+        tools,
+        fold,
+        write_options,
+        &SystemPromptFragments::default(),
+    )
+    .await
+}
+
+pub async fn run_until_stop_with_options_and_fragments(
+    dir: &Path,
+    model: &dyn Model,
+    tools: &dyn ToolExecutor,
+    fold: &dyn Fold,
+    write_options: WriteOptions,
+    system_fragments: &SystemPromptFragments,
+) -> Result<StepOutcome> {
     info!(dir = %dir.display(), "runner started");
     loop {
-        match step_with_options(dir, model, tools, fold, write_options).await? {
+        match step_with_options_and_fragments(
+            dir,
+            model,
+            tools,
+            fold,
+            write_options,
+            system_fragments,
+        )
+        .await?
+        {
             StepOutcome::Continue => continue,
             other => return Ok(other),
         }
@@ -819,12 +878,21 @@ pub fn status_report(dir: &Path) -> Result<String> {
     Ok(report)
 }
 
-fn resolve_system_prompt(config: &SystemConfig) -> String {
-    let mut parts = vec![DEFAULT_SYSTEM_PROMPT.to_string()];
+fn resolve_system_prompt(config: &SystemConfig, fragments: &SystemPromptFragments) -> String {
+    let mut parts = vec![system_section("Sled Protocol", DEFAULT_SYSTEM_PROMPT)];
+    if let Some(tools) = &fragments.available_tools
+        && !tools.trim().is_empty()
+    {
+        parts.push(system_section("Available Tools", tools));
+    }
     if !config.prompt.trim().is_empty() {
-        parts.push(config.prompt.trim().to_string());
+        parts.push(system_section("Dialog Instructions", &config.prompt));
     }
     parts.join("\n\n")
+}
+
+fn system_section(title: &str, body: &str) -> String {
+    format!("=== {title} ===\n{}", body.trim())
 }
 
 fn shorten(text: &str, limit: usize) -> String {
@@ -957,12 +1025,34 @@ mod tests {
 
     #[test]
     fn system_prompt_is_internal_prompt_plus_system_config() {
-        let system = resolve_system_prompt(&SystemConfig {
-            prompt: "Dialog prompt.".into(),
-        });
+        let system = resolve_system_prompt(
+            &SystemConfig {
+                prompt: "Dialog prompt.".into(),
+            },
+            &SystemPromptFragments::default(),
+        );
 
-        assert!(system.starts_with(DEFAULT_SYSTEM_PROMPT));
-        assert!(system.ends_with("\n\nDialog prompt."));
+        assert!(system.starts_with("=== Sled Protocol ===\n"));
+        assert!(system.contains(DEFAULT_SYSTEM_PROMPT));
+        assert!(system.ends_with("=== Dialog Instructions ===\nDialog prompt."));
+    }
+
+    #[test]
+    fn system_prompt_sections_are_ordered() {
+        let system = resolve_system_prompt(
+            &SystemConfig {
+                prompt: "Dialog prompt.".into(),
+            },
+            &SystemPromptFragments::new(Some("Tool prompt.".into())),
+        );
+
+        let sled = system.find("=== Sled Protocol ===").unwrap();
+        let tools = system.find("=== Available Tools ===").unwrap();
+        let dialog = system.find("=== Dialog Instructions ===").unwrap();
+
+        assert!(sled < tools);
+        assert!(tools < dialog);
+        assert!(system.contains("=== Available Tools ===\nTool prompt."));
     }
 
     #[test]

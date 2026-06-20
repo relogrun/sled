@@ -16,12 +16,18 @@ pub struct ToolContext {
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
+
+    fn description(&self) -> Option<&'static str> {
+        None
+    }
+
     async fn execute(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult>;
 }
 
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: HashMap<String, Box<dyn Tool>>,
+    order: Vec<String>,
 }
 
 impl ToolRegistry {
@@ -42,7 +48,36 @@ impl ToolRegistry {
     where
         T: Tool + 'static,
     {
-        self.tools.insert(tool.name().into(), Box::new(tool));
+        let name = tool.name().to_string();
+        if !self.tools.contains_key(&name) {
+            self.order.push(name.clone());
+        }
+        self.tools.insert(name, Box::new(tool));
+    }
+
+    pub fn tool_descriptions_prompt(&self) -> Option<String> {
+        let descriptions: Vec<(&str, &str)> = self
+            .order
+            .iter()
+            .filter_map(|name| {
+                let tool = self.tools.get(name)?;
+                Some((tool.name(), tool.description()?))
+            })
+            .collect();
+        if descriptions.is_empty() {
+            return None;
+        }
+
+        let mut fragment =
+            String::from("Use these descriptions as the authoritative tool contracts.\n");
+        for (name, description) in descriptions {
+            fragment.push_str("\nTool `");
+            fragment.push_str(name);
+            fragment.push_str("`:\n");
+            fragment.push_str(description.trim());
+            fragment.push('\n');
+        }
+        Some(fragment)
     }
 
     pub async fn execute(&self, ctx: &ToolContext, call: &Call) -> Result<ToolResult> {
@@ -137,6 +172,64 @@ mod tests {
             ToolResult::completed(json!({
                 "dialog_dir": "runs/example/dialog",
             }))
+        );
+    }
+
+    struct DescribedTool;
+
+    #[async_trait]
+    impl Tool for DescribedTool {
+        fn name(&self) -> &'static str {
+            "described"
+        }
+
+        fn description(&self) -> Option<&'static str> {
+            Some("Use for tests.")
+        }
+
+        async fn execute(&self, _ctx: &ToolContext, _args: Value) -> Result<ToolResult> {
+            Ok(ToolResult::completed(json!({})))
+        }
+    }
+
+    struct OtherDescribedTool;
+
+    #[async_trait]
+    impl Tool for OtherDescribedTool {
+        fn name(&self) -> &'static str {
+            "other"
+        }
+
+        fn description(&self) -> Option<&'static str> {
+            Some("Use for other tests.")
+        }
+
+        async fn execute(&self, _ctx: &ToolContext, _args: Value) -> Result<ToolResult> {
+            Ok(ToolResult::completed(json!({})))
+        }
+    }
+
+    #[test]
+    fn tool_descriptions_prompt_includes_tool_descriptions() {
+        let mut registry = ToolRegistry::new();
+        registry.register(DescribedTool);
+
+        let fragment = registry.tool_descriptions_prompt().unwrap();
+
+        assert!(fragment.contains("Tool `described`:"));
+        assert!(fragment.contains("Use for tests."));
+    }
+
+    #[test]
+    fn tool_descriptions_prompt_preserves_registration_order() {
+        let mut registry = ToolRegistry::new();
+        registry.register(OtherDescribedTool);
+        registry.register(DescribedTool);
+
+        let fragment = registry.tool_descriptions_prompt().unwrap();
+
+        assert!(
+            fragment.find("Tool `other`:").unwrap() < fragment.find("Tool `described`:").unwrap()
         );
     }
 }

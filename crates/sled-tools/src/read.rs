@@ -13,6 +13,12 @@ impl Tool for ReadTool {
         "read"
     }
 
+    fn description(&self) -> Option<&'static str> {
+        Some(
+            "Read UTF-8 text files from the local filesystem. Args: {\"paths\":[\"Cargo.toml\"]}. Batch independent paths in one call.",
+        )
+    }
+
     async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<ToolResult> {
         let paths = args["paths"].as_array().cloned().unwrap_or_default();
         let sections: Vec<Value> = paths

@@ -12,6 +12,10 @@ impl Tool for EchoTool {
         "echo"
     }
 
+    fn description(&self) -> Option<&'static str> {
+        Some("Echo the provided JSON arguments. Args: any JSON object.")
+    }
+
     async fn execute(&self, _ctx: &ToolContext, args: Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::completed(json!({
             "ok": true,

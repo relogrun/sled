@@ -12,6 +12,12 @@ impl Tool for EscalateTool {
         "escalate"
     }
 
+    fn description(&self) -> Option<&'static str> {
+        Some(
+            "Suspend the run and ask the human for input when you cannot continue without a decision or answer. Args: {\"reason\":\"I need a human decision before continuing.\"}.",
+        )
+    }
+
     async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<ToolResult> {
         let reason = args["reason"].as_str().unwrap_or("").trim();
         Ok(ToolResult::suspended(json!({

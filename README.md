@@ -2,7 +2,7 @@
 
 A dialog is a directory. Every message is a file. Status changes are atomic.
 
-It is built for direct, hands-on work with models when you want to inspect, edit, or replay a research dialog, run model work from scripts or CI, or see the exact context sent to the model.
+It is built for direct, hands-on work with models when you want to inspect, edit, or replay a research dialog, run model work from scripts or CI, or inspect the assembled model input.
 
 `sled` is intentionally simple: one user, no parallel runs, no server. The filenames show whose turn it is and what is in flight.
 
@@ -70,7 +70,7 @@ ls -1 ./runs/example
 cargo run -p sled-cli -- status ./runs/example
 ```
 
-Inspect the exact context sent to the model:
+Inspect the assembled system prompt, index, and bodies for the current dialog files:
 
 ```bash
 cargo run -p sled-cli -- context ./runs/example
@@ -126,7 +126,7 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--recent-messages <n>` to use `recent-messages`.
   - `--recent-bytes <bytes>` to use `recent-bytes`.
   - `--body-mirror` to save markdown body mirrors as enabled. Default: off.
-- `context <dir>` — show the exact prompt, index, and bodies sent to the model.
+- `context <dir>` — show the assembled system prompt, index, and bodies for the current dialog files.
 - `status <dir>` — print the current non-terminal file if one exists, plus the latest message.
 - `config <dir>` — create or update `_config.json5`.
   - `--provider <operator|openai|openai-compatible|anthropic>` to save a provider override. If absent, the runtime default is `openai`.
@@ -231,7 +231,7 @@ cargo run -p sled-cli -- init ./runs/example --system "Be concise."
 cargo run -p sled-cli -- init ./runs/example --system-file ./system.md
 ```
 
-Built-in sled protocol prompts are always included. `_system.json5` only appends dialog-specific instructions.
+Built-in sled protocol prompts are always included. Tool descriptions from the active `ToolRegistry` are inserted as their own section. `_system.json5` only appends dialog-specific instructions.
 
 ## Tools
 
@@ -279,11 +279,12 @@ Add a tool when the model needs a new action.
 
 - Put the tool in its own source file, like the built-in tools in `sled-tools`.
 - Implement the `Tool` trait.
+- Return a `description()` string. This is the tool contract shown to the model in the `Available Tools` system prompt section. Include when to use the tool, the expected JSON args, batching rules if any, and what the model should do after the result.
 - Return `ToolResult::Completed(value)` for a normal result.
 - Return `ToolResult::Suspended(request)` when a human must answer before the tool call can finish.
 - Register the tool in a `ToolRegistry` and pass it through a `Profile`.
 - Start from `ToolRegistry::with_defaults()` to include built-ins, or `ToolRegistry::new()` to exclude them.
-- Put the tool instructions in `_system.json5` with `init --system`, `init --system-file`, or a manual edit so the model knows how to call it.
+- Put dialog-specific behavior in `_system.json5` with `init --system`, `init --system-file`, or a manual edit. Do not put the basic tool contract there; keep it on the tool's `description()` so every profile that registers the tool exposes the same contract.
 
 See `crates/sled-cli/examples/custom_profile.rs` for a minimal custom binary.
 
