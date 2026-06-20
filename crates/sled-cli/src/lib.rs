@@ -302,7 +302,7 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             let fold = selected_fold(&profile, fold_override.as_deref());
             let system_fragments = system_prompt_fragments(&profile);
             let input = preview_model_input(&dir, fold, &system_fragments)?;
-            println!("=== system ===\n{}\n", input.system);
+            println!("{}\n", input.system);
             println!("=== index ===\n{}", input.context.index);
             println!("=== bodies ===\n{}", input.context.bodies);
         }
