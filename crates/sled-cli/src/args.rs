@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use sled_ai::{AnthropicEffort, AnthropicThinking, OpenAiReasoningEffort, Provider};
 use std::path::PathBuf;
 
@@ -32,121 +32,86 @@ pub(crate) enum Command {
     },
     Config {
         dir: PathBuf,
-        #[arg(long, help = "Save provider override")]
-        provider: Option<Provider>,
-        #[arg(long, help = "Save model override for the selected provider")]
-        model: Option<String>,
-        #[arg(long = "openai-reasoning", help = "Save OpenAI reasoning effort")]
-        openai_reasoning: Option<OpenAiReasoningEffort>,
-        #[arg(long = "anthropic-effort", help = "Save Anthropic effort")]
-        anthropic_effort: Option<AnthropicEffort>,
-        #[arg(long = "anthropic-thinking", help = "Save Anthropic thinking mode")]
-        anthropic_thinking: Option<AnthropicThinking>,
-        #[arg(
-            long = "openai-compatible-base-url",
-            help = "Save base URL for openai-compatible providers"
-        )]
-        openai_compatible_base_url: Option<String>,
-        #[arg(long, help = "Clear saved fold selection and use full message context")]
-        all: bool,
-        #[arg(
-            long = "recent-messages",
-            help = "Save limit to the last n message bodies"
-        )]
-        recent_messages: Option<usize>,
-        #[arg(
-            long = "recent-bytes",
-            help = "Save byte budget for newest body sections"
-        )]
-        recent_bytes: Option<usize>,
-        #[arg(
-            long = "recent-tokens",
-            help = "Save estimated token budget for newest body sections"
-        )]
-        recent_tokens: Option<usize>,
-        #[arg(
-            long = "context-window-tokens",
-            help = "Save model context window token limit"
-        )]
-        context_window_tokens: Option<usize>,
-        #[arg(
-            long = "context-ratio",
-            help = "Save max ratio of the model context window used by input"
-        )]
-        context_ratio: Option<f32>,
-        #[arg(long, help = "Save markdown body mirrors as enabled")]
-        body_mirror: bool,
+        #[command(flatten)]
+        options: DialogArgs,
     },
     Run {
         dir: PathBuf,
-        #[arg(long, help = "Provider to use (default: openai)")]
-        provider: Option<Provider>,
-        #[arg(
-            long,
-            help = "Model override for the selected provider (defaults: openai=gpt-5.4-mini, anthropic=claude-sonnet-4-6; openai-compatible requires one)"
-        )]
-        model: Option<String>,
-        #[arg(
-            long = "openai-reasoning",
-            help = "OpenAI reasoning effort for this run"
-        )]
-        openai_reasoning: Option<OpenAiReasoningEffort>,
-        #[arg(long = "anthropic-effort", help = "Anthropic effort for this run")]
-        anthropic_effort: Option<AnthropicEffort>,
-        #[arg(
-            long = "anthropic-thinking",
-            help = "Anthropic thinking mode for this run"
-        )]
-        anthropic_thinking: Option<AnthropicThinking>,
-        #[arg(
-            long = "openai-compatible-base-url",
-            help = "Base URL for openai-compatible providers"
-        )]
-        openai_compatible_base_url: Option<String>,
-        #[arg(long, help = "Use full message context (default)")]
-        all: bool,
-        #[arg(long = "recent-messages", help = "Use only the last n message bodies")]
-        recent_messages: Option<usize>,
-        #[arg(
-            long = "recent-bytes",
-            help = "Use a byte budget for newest body sections"
-        )]
-        recent_bytes: Option<usize>,
-        #[arg(
-            long = "recent-tokens",
-            help = "Use an estimated token budget for newest body sections"
-        )]
-        recent_tokens: Option<usize>,
-        #[arg(
-            long = "context-window-tokens",
-            help = "Model context window token limit"
-        )]
-        context_window_tokens: Option<usize>,
-        #[arg(
-            long = "context-ratio",
-            help = "Max ratio of the model context window used by input"
-        )]
-        context_ratio: Option<f32>,
-        #[arg(
-            long,
-            help = "Write readable .done.md mirrors beside JSON5 files (default: off)"
-        )]
-        body_mirror: bool,
+        #[command(flatten)]
+        options: DialogArgs,
     },
     Status {
         dir: PathBuf,
     },
     Context {
         dir: PathBuf,
-        #[arg(
-            long = "context-window-tokens",
-            help = "Model context window token limit"
-        )]
-        context_window_tokens: Option<usize>,
-        #[arg(
-            long = "context-ratio",
-            help = "Max ratio of the model context window used by input"
-        )]
-        context_ratio: Option<f32>,
+        #[command(flatten)]
+        context: ContextArgs,
     },
+}
+
+#[derive(Args, Clone, Default)]
+pub(crate) struct DialogArgs {
+    #[command(flatten)]
+    pub(crate) provider: ProviderArgs,
+    #[command(flatten)]
+    pub(crate) fold: FoldArgs,
+    #[command(flatten)]
+    pub(crate) context: ContextArgs,
+    #[arg(
+        long,
+        help = "Write readable .done.md mirrors beside JSON5 files (default: off)"
+    )]
+    pub(crate) body_mirror: bool,
+}
+
+#[derive(Args, Clone, Default)]
+pub(crate) struct ProviderArgs {
+    #[arg(long, help = "Provider to use")]
+    pub(crate) provider: Option<Provider>,
+    #[arg(long, help = "Model override for the selected provider")]
+    pub(crate) model: Option<String>,
+    #[arg(long = "openai-reasoning", help = "OpenAI reasoning effort")]
+    pub(crate) openai_reasoning: Option<OpenAiReasoningEffort>,
+    #[arg(long = "anthropic-effort", help = "Anthropic effort")]
+    pub(crate) anthropic_effort: Option<AnthropicEffort>,
+    #[arg(long = "anthropic-thinking", help = "Anthropic thinking mode")]
+    pub(crate) anthropic_thinking: Option<AnthropicThinking>,
+    #[arg(
+        long = "openai-compatible-base-url",
+        help = "Base URL for openai-compatible providers"
+    )]
+    pub(crate) openai_compatible_base_url: Option<String>,
+}
+
+#[derive(Args, Clone, Default)]
+pub(crate) struct FoldArgs {
+    #[arg(long, help = "Use full message context")]
+    pub(crate) all: bool,
+    #[arg(long = "recent-messages", help = "Use only the last n message bodies")]
+    pub(crate) recent_messages: Option<usize>,
+    #[arg(
+        long = "recent-bytes",
+        help = "Use a byte budget for newest body sections"
+    )]
+    pub(crate) recent_bytes: Option<usize>,
+    #[arg(
+        long = "recent-tokens",
+        help = "Use an estimated token budget for newest body sections"
+    )]
+    pub(crate) recent_tokens: Option<usize>,
+}
+
+#[derive(Args, Clone, Default)]
+pub(crate) struct ContextArgs {
+    #[arg(
+        long = "context-window-tokens",
+        help = "Model context window token limit"
+    )]
+    pub(crate) context_window_tokens: Option<usize>,
+    #[arg(
+        long = "context-ratio",
+        help = "Max ratio of the model context window used by input"
+    )]
+    pub(crate) context_ratio: Option<f32>,
 }

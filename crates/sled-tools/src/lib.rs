@@ -10,3 +10,6 @@ pub use open::OpenTool;
 pub use read::ReadTool;
 pub use registry::{Tool, ToolContext, ToolRegistry};
 pub use sled_core::ToolResult;
+
+#[cfg(test)]
+mod tests;

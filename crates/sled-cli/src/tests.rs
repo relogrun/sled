@@ -26,10 +26,8 @@ fn resolving_missing_config_does_not_create_config_file() {
     let dir = temp_dir();
     fs::create_dir_all(&dir).unwrap();
 
-    let (resolved, file_exists) =
-        read_resolved_dialog_config(&dir, DialogOptionOverrides::default()).unwrap();
+    let resolved = read_resolved_dialog_config(&dir, DialogOptionOverrides::default()).unwrap();
 
-    assert!(!file_exists);
     assert!(matches!(resolved.provider, Provider::OpenAi));
     assert_eq!(
         resolved.context_limit,

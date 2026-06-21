@@ -7,9 +7,8 @@ mod run;
 
 use crate::args::{Cli, Command};
 use crate::config::{
-    DialogOptionOverrides, apply_dialog_option_overrides, body_mirror_override,
-    build_fold_override, read_dialog_config, read_resolved_dialog_config, resolve_dialog_config,
-    write_dialog_config,
+    DialogOptionOverrides, apply_dialog_option_overrides, build_fold_override, read_dialog_config,
+    read_resolved_dialog_config, resolve_dialog_config, write_dialog_config,
 };
 use crate::init::system_prompt;
 use crate::logging::init_logging;
@@ -55,10 +54,10 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             body_mirror,
         } => {
             std::fs::create_dir_all(&dir)?;
-            let (config, _) = read_resolved_dialog_config(
+            let config = read_resolved_dialog_config(
                 &dir,
                 DialogOptionOverrides {
-                    body_mirror: body_mirror_override(body_mirror),
+                    body_mirror: body_mirror.then_some(true),
                     ..DialogOptionOverrides::default()
                 },
             )?;
@@ -69,99 +68,26 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
                 run_dialog(&dir, &profile, run_options_from_resolved_config(config)?).await?;
             }
         }
-        Command::Config {
-            dir,
-            provider,
-            model,
-            openai_reasoning,
-            anthropic_effort,
-            anthropic_thinking,
-            openai_compatible_base_url,
-            all,
-            recent_messages,
-            recent_bytes,
-            recent_tokens,
-            context_window_tokens,
-            context_ratio,
-            body_mirror,
-        } => {
+        Command::Config { dir, options } => {
             std::fs::create_dir_all(&dir)?;
             let mut config = read_dialog_config(&dir)?;
-            apply_dialog_option_overrides(
-                &mut config,
-                DialogOptionOverrides {
-                    provider,
-                    model,
-                    openai_reasoning,
-                    anthropic_effort,
-                    anthropic_thinking,
-                    openai_compatible_base_url,
-                    all,
-                    recent_messages,
-                    recent_bytes,
-                    recent_tokens,
-                    context_window_tokens,
-                    context_ratio,
-                    body_mirror: body_mirror_override(body_mirror),
-                },
-            )?;
+            apply_dialog_option_overrides(&mut config, options.into())?;
             let resolved = resolve_dialog_config(config.clone(), DialogOptionOverrides::default())?;
             let _ = build_fold_override(&resolved)?;
             write_dialog_config(&dir, &config)?;
             println!("wrote {}", dir.join("_config.json5").display());
         }
-        Command::Run {
-            dir,
-            provider,
-            model,
-            openai_reasoning,
-            anthropic_effort,
-            anthropic_thinking,
-            openai_compatible_base_url,
-            all,
-            recent_messages,
-            recent_bytes,
-            recent_tokens,
-            context_window_tokens,
-            context_ratio,
-            body_mirror,
-        } => {
+        Command::Run { dir, options } => {
             std::fs::create_dir_all(&dir)?;
-            let overrides = DialogOptionOverrides {
-                provider,
-                model,
-                openai_reasoning,
-                anthropic_effort,
-                anthropic_thinking,
-                openai_compatible_base_url,
-                all,
-                recent_messages,
-                recent_bytes,
-                recent_tokens,
-                context_window_tokens,
-                context_ratio,
-                body_mirror: body_mirror_override(body_mirror),
-            };
-            let (config, _) = read_resolved_dialog_config(&dir, overrides)?;
+            let config = read_resolved_dialog_config(&dir, options.into())?;
             run_dialog(&dir, &profile, run_options_from_resolved_config(config)?).await?;
         }
         Command::Status { dir } => {
             print!("{}", status_report(&dir)?);
         }
-        Command::Context {
-            dir,
-            context_window_tokens,
-            context_ratio,
-        } => {
+        Command::Context { dir, context } => {
             std::fs::create_dir_all(&dir)?;
-            let (config, _) = read_resolved_dialog_config(
-                &dir,
-                DialogOptionOverrides {
-                    context_window_tokens,
-                    context_ratio,
-                    ..DialogOptionOverrides::default()
-                },
-            )?;
+            let config = read_resolved_dialog_config(&dir, context.into())?;
             let fold_override = build_fold_override(&config)?;
             let fold = selected_fold(&profile, fold_override.as_deref());
             let available_tools = available_tools_prompt(&profile);

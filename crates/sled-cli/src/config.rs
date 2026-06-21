@@ -1,3 +1,4 @@
+use crate::args::{ContextArgs, DialogArgs};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sled_ai::{AnthropicEffort, AnthropicThinking, OpenAiReasoningEffort, Provider, default_model};
@@ -89,6 +90,36 @@ pub(crate) struct DialogOptionOverrides {
     pub(crate) body_mirror: Option<bool>,
 }
 
+impl From<DialogArgs> for DialogOptionOverrides {
+    fn from(args: DialogArgs) -> Self {
+        Self {
+            provider: args.provider.provider,
+            model: args.provider.model,
+            openai_reasoning: args.provider.openai_reasoning,
+            anthropic_effort: args.provider.anthropic_effort,
+            anthropic_thinking: args.provider.anthropic_thinking,
+            openai_compatible_base_url: args.provider.openai_compatible_base_url,
+            all: args.fold.all,
+            recent_messages: args.fold.recent_messages,
+            recent_bytes: args.fold.recent_bytes,
+            recent_tokens: args.fold.recent_tokens,
+            context_window_tokens: args.context.context_window_tokens,
+            context_ratio: args.context.context_ratio,
+            body_mirror: body_mirror_override(args.body_mirror),
+        }
+    }
+}
+
+impl From<ContextArgs> for DialogOptionOverrides {
+    fn from(args: ContextArgs) -> Self {
+        Self {
+            context_window_tokens: args.context_window_tokens,
+            context_ratio: args.context_ratio,
+            ..Self::default()
+        }
+    }
+}
+
 pub(crate) fn resolve_dialog_config(
     mut config: DialogConfig,
     overrides: DialogOptionOverrides,
@@ -149,16 +180,8 @@ pub(crate) fn write_dialog_config(dir: &Path, config: &DialogConfig) -> Result<(
 pub(crate) fn read_resolved_dialog_config(
     dir: &Path,
     overrides: DialogOptionOverrides,
-) -> Result<(ResolvedDialogConfig, bool)> {
-    let path = dir.join("_config.json5");
-    let file_exists = path.exists();
-    let config = if file_exists {
-        read_dialog_config(dir)?
-    } else {
-        DialogConfig::default()
-    };
-    let resolved = resolve_dialog_config(config, overrides)?;
-    Ok((resolved, file_exists))
+) -> Result<ResolvedDialogConfig> {
+    resolve_dialog_config(read_dialog_config(dir)?, overrides)
 }
 
 #[cfg(test)]
