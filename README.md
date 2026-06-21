@@ -6,7 +6,7 @@ It is built for direct, hands-on work with models when you want to inspect, edit
 
 `sled` is intentionally simple: one user, no parallel runs, no server. The filenames show whose turn it is and what is in flight.
 
-`ls` shows the whole run, and a text editor lets you inspect, repair, or replay any step. There is nothing else: no database, no separate state file, no in-memory state that survives the process.
+You can inspect every layer directly: list files, open JSON5 messages, run `context` to see the exact model input, and use `archive` tooling to recover compacted details. There is nothing else: no database, no separate state file, no in-memory state that survives the process.
 
 Each filled message is a JSON5 file named by slot, role, and status:
 
@@ -96,8 +96,6 @@ The system has four main moving parts:
 - Tools let the model act. A model writes one `tool.pending` request; sled executes it, records the result in the same file, and continues.
 - Folds decide what the model can see. A fold turns the current dialog files into `index` and `bodies`, then the common context budget keeps the newest whole body sections that fit.
 - Compact rewrites old dialog files into a summarized `compact` message and archives the originals. It is a storage operation that makes later folds smaller.
-
-You can inspect every layer directly: list files, open JSON5 messages, run `context` to see the exact model input, and use `archive` tooling to recover compacted details.
 
 ## File Roles and Statuses
 
