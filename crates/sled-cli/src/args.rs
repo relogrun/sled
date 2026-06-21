@@ -12,15 +12,28 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    #[command(about = "Create a dialog directory and optional dialog system prompt")]
     Init {
+        #[arg(value_name = "DIR", help = "Dialog directory")]
         dir: PathBuf,
-        #[arg(long, conflicts_with = "system_file")]
+        #[arg(
+            long,
+            conflicts_with = "system_file",
+            help = "Dialog-specific system prompt text"
+        )]
         system: Option<String>,
-        #[arg(long = "system-file")]
+        #[arg(
+            long = "system-file",
+            value_name = "PATH",
+            help = "Read dialog-specific system prompt text from a file"
+        )]
         system_file: Option<PathBuf>,
     },
+    #[command(about = "Append a user message or answer the current awaiting slot")]
     Say {
+        #[arg(value_name = "DIR", help = "Dialog directory")]
         dir: PathBuf,
+        #[arg(value_name = "TEXT", help = "Message text")]
         text: String,
         #[arg(long, help = "Run immediately after writing the user message")]
         run: bool,
@@ -30,25 +43,35 @@ pub(crate) enum Command {
         )]
         body_mirror: bool,
     },
+    #[command(about = "Create or update dialog-local _config.json5")]
     Config {
+        #[arg(value_name = "DIR", help = "Dialog directory")]
         dir: PathBuf,
         #[command(flatten)]
         options: DialogArgs,
     },
+    #[command(about = "Continue the dialog until finished, awaiting input, or error")]
     Run {
+        #[arg(value_name = "DIR", help = "Dialog directory")]
         dir: PathBuf,
         #[command(flatten)]
         options: DialogArgs,
     },
+    #[command(about = "Summarize active done slots into one compact message and archive originals")]
     Compact {
+        #[arg(value_name = "DIR", help = "Dialog directory")]
         dir: PathBuf,
         #[command(flatten)]
         options: CompactArgs,
     },
+    #[command(about = "Print current dialog status and latest message")]
     Status {
+        #[arg(value_name = "DIR", help = "Dialog directory")]
         dir: PathBuf,
     },
+    #[command(about = "Print the model input assembled from system prompt, index, and bodies")]
     Context {
+        #[arg(value_name = "DIR", help = "Dialog directory")]
         dir: PathBuf,
         #[command(flatten)]
         context: ContextArgs,
@@ -59,7 +82,11 @@ pub(crate) enum Command {
 pub(crate) struct DialogArgs {
     #[command(flatten)]
     pub(crate) provider: ProviderArgs,
-    #[arg(long, help = "Fold pipeline, such as all or recent-tokens:50000")]
+    #[arg(
+        long,
+        value_name = "PIPELINE",
+        help = "Fold pipeline: all | recent-messages:N | recent-tokens:N"
+    )]
     pub(crate) fold: Option<String>,
     #[command(flatten)]
     pub(crate) context: ContextLimitArgs,
@@ -72,26 +99,47 @@ pub(crate) struct DialogArgs {
 
 #[derive(Args, Clone, Default)]
 pub(crate) struct ProviderArgs {
-    #[arg(long, help = "Provider to use")]
+    #[arg(
+        long,
+        value_name = "PROVIDER",
+        help = "Provider: operator | openai | openai-compatible | anthropic"
+    )]
     pub(crate) provider: Option<Provider>,
-    #[arg(long, help = "Model override for the selected provider")]
+    #[arg(long, value_name = "MODEL", help = "Model for the selected provider")]
     pub(crate) model: Option<String>,
-    #[arg(long = "openai-reasoning", help = "OpenAI reasoning effort")]
+    #[arg(
+        long = "openai-reasoning",
+        value_name = "EFFORT",
+        help = "OpenAI reasoning effort: minimal | low | medium | high"
+    )]
     pub(crate) openai_reasoning: Option<OpenAiReasoningEffort>,
-    #[arg(long = "anthropic-effort", help = "Anthropic effort")]
+    #[arg(
+        long = "anthropic-effort",
+        value_name = "EFFORT",
+        help = "Anthropic effort: low | medium | high | xhigh | max"
+    )]
     pub(crate) anthropic_effort: Option<AnthropicEffort>,
-    #[arg(long = "anthropic-thinking", help = "Anthropic thinking mode")]
+    #[arg(
+        long = "anthropic-thinking",
+        value_name = "MODE",
+        help = "Anthropic thinking mode: off | adaptive"
+    )]
     pub(crate) anthropic_thinking: Option<AnthropicThinking>,
     #[arg(
         long = "openai-compatible-base-url",
-        help = "Base URL for openai-compatible providers"
+        value_name = "URL",
+        help = "Base URL for openai-compatible provider"
     )]
     pub(crate) openai_compatible_base_url: Option<String>,
 }
 
 #[derive(Args, Clone, Default)]
 pub(crate) struct ContextArgs {
-    #[arg(long, help = "Fold pipeline, such as all or recent-tokens:50000")]
+    #[arg(
+        long,
+        value_name = "PIPELINE",
+        help = "Fold pipeline: all | recent-messages:N | recent-tokens:N"
+    )]
     pub(crate) fold: Option<String>,
     #[command(flatten)]
     pub(crate) context: ContextLimitArgs,
@@ -101,12 +149,14 @@ pub(crate) struct ContextArgs {
 pub(crate) struct ContextLimitArgs {
     #[arg(
         long = "context-window-tokens",
-        help = "Model context window token limit"
+        value_name = "TOKENS",
+        help = "Model context window token limit; known models have defaults"
     )]
     pub(crate) context_window_tokens: Option<usize>,
     #[arg(
         long = "context-ratio",
-        help = "Max ratio of the model context window used by input"
+        value_name = "RATIO",
+        help = "Max ratio of the model context window used by input; default 0.8"
     )]
     pub(crate) context_ratio: Option<f32>,
 }
@@ -117,19 +167,33 @@ pub(crate) struct CompactArgs {
     pub(crate) provider: ProviderArgs,
     #[command(flatten)]
     pub(crate) context: ContextLimitArgs,
-    #[arg(long = "from-slot", help = "First active done slot to compact")]
+    #[arg(
+        long = "from-slot",
+        value_name = "N",
+        help = "First active done slot to compact; default is the first active done slot"
+    )]
     pub(crate) from_slot: Option<u32>,
-    #[arg(long = "to-slot", help = "Last active done slot to compact")]
+    #[arg(
+        long = "to-slot",
+        value_name = "N",
+        help = "Compact through active done slot N; exclusive with --keep-recent and --keep-recent-tokens"
+    )]
     pub(crate) to_slot: Option<u32>,
-    #[arg(long = "keep-recent", help = "Keep the last n active done slots raw")]
+    #[arg(
+        long = "keep-recent",
+        value_name = "N",
+        help = "Compact all but the last N active done slots; exclusive with --to-slot and --keep-recent-tokens"
+    )]
     pub(crate) keep_recent: Option<usize>,
     #[arg(
         long = "keep-recent-tokens",
-        help = "Keep the newest active done body sections fitting this estimated token budget raw"
+        value_name = "TOKENS",
+        help = "Compact all but newest active done bodies fitting this estimated token budget; exclusive with --to-slot and --keep-recent"
     )]
     pub(crate) keep_recent_tokens: Option<usize>,
     #[arg(
         long = "summary-tokens",
+        value_name = "TOKENS",
         default_value_t = 2000,
         help = "Target compact summary size in estimated tokens"
     )]
