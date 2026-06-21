@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use sled_core::Fold;
-use sled_fold::{AllFold, FoldPipeline, RecentBytesFold, RecentMessagesFold, RecentTokensFold};
+use sled_fold::{AllFold, FoldPipeline, RecentMessagesFold, RecentTokensFold};
 
 pub(crate) fn build_fold_pipeline(spec: &str) -> Result<Box<dyn Fold>> {
     let stages = parse_stages(spec)?;
@@ -44,27 +44,16 @@ fn build_source(stage: &str) -> Result<Box<dyn Fold>> {
             value,
         )?)));
     }
-    if let Some(value) = stage.strip_prefix("recent-bytes:") {
-        return Ok(Box::new(RecentBytesFold::new(parse_positive_usize(
-            "recent-bytes",
-            value,
-        )?)));
-    }
     if let Some(value) = stage.strip_prefix("recent-tokens:") {
         return Ok(Box::new(RecentTokensFold::new(parse_positive_usize(
             "recent-tokens",
             value,
         )?)));
     }
-    if stage.starts_with("recent-messages")
-        || stage.starts_with("recent-bytes")
-        || stage.starts_with("recent-tokens")
-    {
+    if stage.starts_with("recent-messages") || stage.starts_with("recent-tokens") {
         bail!("fold stage `{stage}` requires a positive numeric limit after `:`");
     }
-    bail!(
-        "first fold stage must be one of: all, recent-messages:N, recent-bytes:N, recent-tokens:N"
-    )
+    bail!("first fold stage must be one of: all, recent-messages:N, recent-tokens:N")
 }
 
 fn parse_positive_usize(name: &str, value: &str) -> Result<usize> {
@@ -78,8 +67,5 @@ fn parse_positive_usize(name: &str, value: &str) -> Result<usize> {
 }
 
 fn is_source_stage(stage: &str) -> bool {
-    stage == "all"
-        || stage.starts_with("recent-messages")
-        || stage.starts_with("recent-bytes")
-        || stage.starts_with("recent-tokens")
+    stage == "all" || stage.starts_with("recent-messages") || stage.starts_with("recent-tokens")
 }

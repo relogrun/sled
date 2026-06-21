@@ -124,7 +124,7 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--anthropic-effort <low|medium|high|xhigh|max>` to set Anthropic effort for this run.
   - `--anthropic-thinking <off|adaptive>` to set Anthropic thinking mode for this run.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
-  - `--fold <pipeline>` to choose the fold pipeline. Default: `all`. Examples: `all`, `recent-messages:8`, `recent-bytes:20000`, `recent-tokens:50000`.
+  - `--fold <pipeline>` to choose the fold pipeline. Default: `all`. Examples: `all`, `recent-messages:8`, `recent-tokens:50000`.
   - `--context-window-tokens <n>` to override the model context window used for the safety budget.
   - `--context-ratio <ratio>` to override the max ratio of the model context window used by input. Default: `0.8`.
   - `--body-mirror` to save markdown body mirrors as enabled. Default: off.
@@ -215,7 +215,7 @@ Supported keys:
 - `anthropic.thinking`: Anthropic thinking mode, `off` or `adaptive`.
 - `openai_compatible.model`: model name for an OpenAI-compatible provider.
 - `openai_compatible.base_url`: base URL for `openai-compatible`, such as `https://openrouter.ai/api/v1`.
-- `fold`: fold pipeline, one of `all`, `recent-messages:N`, `recent-bytes:N`, or `recent-tokens:N`.
+- `fold`: fold pipeline, one of `all`, `recent-messages:N`, or `recent-tokens:N`.
 - `context_window_tokens`: model context window used for the final input safety budget.
 - `context_ratio`: max ratio of the model context window used by `system + index + bodies`.
 - `body_mirror`: write readable `.done.md` mirrors beside JSON5 files.
@@ -230,7 +230,7 @@ Runtime defaults:
 - `body_mirror`: off
 - `openai-compatible` requires both `openai_compatible.model` and `openai_compatible.base_url`
 
-If `fold` is absent, sled uses `all`. Fold pipelines are comma-separated to leave room for later stages; for now the supported forms are single-stage context-producing folds: `all`, `recent-messages:N`, `recent-bytes:N`, and `recent-tokens:N`.
+If `fold` is absent, sled uses `all`. Fold pipelines are comma-separated to leave room for later stages; for now the supported forms are single-stage context-producing folds: `all`, `recent-messages:N`, and `recent-tokens:N`.
 
 The final safety budget is common to every fold: sled keeps `system` and `index`, then keeps the newest whole body sections that fit within `context_window_tokens * context_ratio`. If `system + index` alone exceeds the budget, the run fails before sending a model request.
 
@@ -312,7 +312,7 @@ Built-in tools:
 ## Workspace
 
 - `sled-core`: file protocol, status transitions, fold trait, runner.
-- `sled-fold`: context fold implementations: `all`, `recent-messages`, `recent-bytes`, and `recent-tokens`.
+- `sled-fold`: context fold implementations: `all`, `recent-messages`, and `recent-tokens`.
 - `sled-ai`: assistant providers.
 - `sled-tools`: sequential tool registry and built-in tools, one tool per source file.
 - `sled-cli`: command-line interface.
@@ -356,4 +356,4 @@ Add a fold when the model should see a different representation of the dialog.
 - Receive the scanned slots and return `Context { index, bodies }`.
 - Do all context selection, summarization, compaction, or reshaping inside the fold.
 
-This is the only place that decides how the directory becomes model context. Existing examples are `AllFold`, `RecentMessagesFold`, `RecentBytesFold`, and `RecentTokensFold`.
+This is the only place that decides how the directory becomes model context. Existing examples are `AllFold`, `RecentMessagesFold`, and `RecentTokensFold`.
