@@ -1,5 +1,5 @@
 use crate::storage::{scan, validate_single_open};
-use crate::system::{SystemPromptFragments, read_system_config, resolve_system_prompt};
+use crate::system::{build_system_prompt, read_dialog_system_prompt};
 use crate::{Context, Fold, ModelInput, Slot};
 use anyhow::{Result, bail};
 use std::path::Path;
@@ -23,55 +23,36 @@ impl Default for ContextLimit {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ModelInputOptions {
+    pub available_tools: Option<String>,
+    pub context_limit: ContextLimit,
+}
+
 pub fn assemble_model_input_from_slots(
     dir: &Path,
     slots: &[Slot],
     fold: &dyn Fold,
-    system_fragments: &SystemPromptFragments,
+    options: ModelInputOptions,
 ) -> Result<ModelInput> {
-    assemble_model_input_from_slots_with_limit(
-        dir,
-        slots,
-        fold,
-        system_fragments,
-        ContextLimit::default(),
-    )
-}
-
-pub fn assemble_model_input_from_slots_with_limit(
-    dir: &Path,
-    slots: &[Slot],
-    fold: &dyn Fold,
-    system_fragments: &SystemPromptFragments,
-    context_limit: ContextLimit,
-) -> Result<ModelInput> {
-    let system_config = read_system_config(dir)?;
+    let dialog_prompt = read_dialog_system_prompt(dir)?;
     fit_model_input(
         ModelInput {
-            system: resolve_system_prompt(&system_config, system_fragments),
+            system: build_system_prompt(&dialog_prompt, options.available_tools.as_deref()),
             context: fold.assemble(slots)?,
         },
-        context_limit,
+        options.context_limit,
     )
 }
 
 pub fn preview_model_input(
     dir: &Path,
     fold: &dyn Fold,
-    system_fragments: &SystemPromptFragments,
-) -> Result<ModelInput> {
-    preview_model_input_with_limit(dir, fold, system_fragments, ContextLimit::default())
-}
-
-pub fn preview_model_input_with_limit(
-    dir: &Path,
-    fold: &dyn Fold,
-    system_fragments: &SystemPromptFragments,
-    context_limit: ContextLimit,
+    options: ModelInputOptions,
 ) -> Result<ModelInput> {
     let slots = scan(dir)?;
     validate_single_open(&slots)?;
-    assemble_model_input_from_slots_with_limit(dir, &slots, fold, system_fragments, context_limit)
+    assemble_model_input_from_slots(dir, &slots, fold, options)
 }
 
 pub(crate) fn fit_model_input(

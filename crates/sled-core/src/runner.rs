@@ -1,9 +1,9 @@
-use crate::model_input::{ContextLimit, assemble_model_input_from_slots_with_limit};
+use crate::model_input::{ContextLimit, ModelInputOptions, assemble_model_input_from_slots};
 use crate::storage::{
     create_slot_with_options, read_message, scan, set_status, validate_single_open,
     write_message_with_options,
 };
-use crate::system::{SystemPromptFragments, write_default_system_config};
+use crate::system::ensure_dialog_system_prompt;
 use crate::{
     Fold, Message, Model, Reply, Slot, Status, ToolExecutor, ToolResult, ToolSuspension,
     WriteOptions,
@@ -20,61 +20,29 @@ pub enum StepOutcome {
     Finished(Option<u32>),
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeOptions {
+    pub write_options: WriteOptions,
+    pub available_tools: Option<String>,
+    pub context_limit: ContextLimit,
+}
+
 pub async fn step(
     dir: &Path,
     model: &dyn Model,
     tools: &dyn ToolExecutor,
     fold: &dyn Fold,
+    options: RuntimeOptions,
 ) -> Result<StepOutcome> {
-    step_with_options(dir, model, tools, fold, WriteOptions::default()).await
+    step_with_runtime_options(dir, model, tools, fold, &options).await
 }
 
-pub async fn step_with_options(
+async fn step_with_runtime_options(
     dir: &Path,
     model: &dyn Model,
     tools: &dyn ToolExecutor,
     fold: &dyn Fold,
-    write_options: WriteOptions,
-) -> Result<StepOutcome> {
-    step_with_options_and_fragments(
-        dir,
-        model,
-        tools,
-        fold,
-        write_options,
-        &SystemPromptFragments::default(),
-    )
-    .await
-}
-
-pub async fn step_with_options_and_fragments(
-    dir: &Path,
-    model: &dyn Model,
-    tools: &dyn ToolExecutor,
-    fold: &dyn Fold,
-    write_options: WriteOptions,
-    system_fragments: &SystemPromptFragments,
-) -> Result<StepOutcome> {
-    step_with_options_fragments_and_limit(
-        dir,
-        model,
-        tools,
-        fold,
-        write_options,
-        system_fragments,
-        ContextLimit::default(),
-    )
-    .await
-}
-
-pub async fn step_with_options_fragments_and_limit(
-    dir: &Path,
-    model: &dyn Model,
-    tools: &dyn ToolExecutor,
-    fold: &dyn Fold,
-    write_options: WriteOptions,
-    system_fragments: &SystemPromptFragments,
-    context_limit: ContextLimit,
+    options: &RuntimeOptions,
 ) -> Result<StepOutcome> {
     debug!(dir = %dir.display(), "runner step start");
     fs::create_dir_all(dir)?;
@@ -85,13 +53,13 @@ pub async fn step_with_options_fragments_and_limit(
         match slots.last() {
             None => {
                 info!(dir = %dir.display(), "empty dialog, creating initial awaiting slot");
-                write_default_system_config(dir)?;
+                ensure_dialog_system_prompt(dir)?;
                 let path = create_slot_with_options(
                     dir,
                     1,
                     Status::Awaiting,
                     &Message::default(),
-                    write_options,
+                    options.write_options,
                 )?;
                 return Ok(StepOutcome::Awaiting(path));
             }
@@ -111,7 +79,7 @@ pub async fn step_with_options_fragments_and_limit(
                     last.num + 1,
                     Status::Running,
                     &Message::default(),
-                    write_options,
+                    options.write_options,
                 )?;
                 return Ok(StepOutcome::Continue);
             }
@@ -149,13 +117,13 @@ pub async fn step_with_options_fragments_and_limit(
             match tools.execute(dir, &slots, &call).await? {
                 ToolResult::Completed(result) => {
                     msg.result = Some(result);
-                    write_message_with_options(&slot.path, &msg, write_options)?;
+                    write_message_with_options(&slot.path, &msg, options.write_options)?;
                     set_status(dir, slot, Status::Done)?;
                     Ok(StepOutcome::Continue)
                 }
                 ToolResult::Suspended(request) => {
                     msg.suspension = Some(ToolSuspension { request });
-                    write_message_with_options(&slot.path, &msg, write_options)?;
+                    write_message_with_options(&slot.path, &msg, options.write_options)?;
                     let path = set_status(dir, slot, Status::Awaiting)?;
                     Ok(StepOutcome::Awaiting(path))
                 }
@@ -175,12 +143,14 @@ pub async fn step_with_options_fragments_and_limit(
                 return Ok(StepOutcome::Continue);
             }
 
-            let input = assemble_model_input_from_slots_with_limit(
+            let input = assemble_model_input_from_slots(
                 dir,
                 &slots,
                 fold,
-                system_fragments,
-                context_limit,
+                ModelInputOptions {
+                    available_tools: options.available_tools.clone(),
+                    context_limit: options.context_limit,
+                },
             )?;
             match model.complete(&input.system, &input.context).await? {
                 Reply::Final {
@@ -200,7 +170,7 @@ pub async fn step_with_options_fragments_and_limit(
                             body: text,
                             ..Message::default()
                         },
-                        write_options,
+                        options.write_options,
                     )?;
                     set_status(dir, slot, Status::Done)?;
                     if wait_user {
@@ -209,7 +179,7 @@ pub async fn step_with_options_fragments_and_limit(
                             slot.num + 1,
                             Status::Awaiting,
                             &Message::default(),
-                            write_options,
+                            options.write_options,
                         )?;
                     }
                     Ok(StepOutcome::Continue)
@@ -224,7 +194,7 @@ pub async fn step_with_options_fragments_and_limit(
                             call: Some(call),
                             ..Message::default()
                         },
-                        write_options,
+                        options.write_options,
                     )?;
                     set_status(dir, slot, Status::Pending)?;
                     Ok(StepOutcome::Continue)
@@ -240,70 +210,11 @@ pub async fn run_until_stop(
     model: &dyn Model,
     tools: &dyn ToolExecutor,
     fold: &dyn Fold,
-) -> Result<StepOutcome> {
-    run_until_stop_with_options(dir, model, tools, fold, WriteOptions::default()).await
-}
-
-pub async fn run_until_stop_with_options(
-    dir: &Path,
-    model: &dyn Model,
-    tools: &dyn ToolExecutor,
-    fold: &dyn Fold,
-    write_options: WriteOptions,
-) -> Result<StepOutcome> {
-    run_until_stop_with_options_and_fragments(
-        dir,
-        model,
-        tools,
-        fold,
-        write_options,
-        &SystemPromptFragments::default(),
-    )
-    .await
-}
-
-pub async fn run_until_stop_with_options_and_fragments(
-    dir: &Path,
-    model: &dyn Model,
-    tools: &dyn ToolExecutor,
-    fold: &dyn Fold,
-    write_options: WriteOptions,
-    system_fragments: &SystemPromptFragments,
-) -> Result<StepOutcome> {
-    run_until_stop_with_options_fragments_and_limit(
-        dir,
-        model,
-        tools,
-        fold,
-        write_options,
-        system_fragments,
-        ContextLimit::default(),
-    )
-    .await
-}
-
-pub async fn run_until_stop_with_options_fragments_and_limit(
-    dir: &Path,
-    model: &dyn Model,
-    tools: &dyn ToolExecutor,
-    fold: &dyn Fold,
-    write_options: WriteOptions,
-    system_fragments: &SystemPromptFragments,
-    context_limit: ContextLimit,
+    options: RuntimeOptions,
 ) -> Result<StepOutcome> {
     info!(dir = %dir.display(), "runner started");
     loop {
-        match step_with_options_fragments_and_limit(
-            dir,
-            model,
-            tools,
-            fold,
-            write_options,
-            system_fragments,
-            context_limit,
-        )
-        .await?
-        {
+        match step_with_runtime_options(dir, model, tools, fold, &options).await? {
             StepOutcome::Continue => continue,
             other => return Ok(other),
         }

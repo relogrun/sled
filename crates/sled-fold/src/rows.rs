@@ -1,5 +1,6 @@
 use anyhow::Result;
-use sled_core::{Context, Message, Slot, read_message};
+use sled_core::storage::read_message;
+use sled_core::{Context, Message, Slot};
 
 pub(crate) struct ContextRow {
     pub(crate) index_line: String,

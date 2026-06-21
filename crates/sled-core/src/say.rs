@@ -2,7 +2,7 @@ use crate::storage::{
     create_slot_with_options, read_message, scan, set_status, validate_single_open,
     write_message_with_options,
 };
-use crate::system::write_default_system_config;
+use crate::system::ensure_dialog_system_prompt;
 use crate::{Message, Slot, Status, WriteOptions};
 use anyhow::{Result, bail};
 use serde_json::Value;
@@ -17,7 +17,7 @@ pub fn say(dir: &Path, text: &str) -> Result<PathBuf> {
 pub fn say_with_options(dir: &Path, text: &str, write_options: WriteOptions) -> Result<PathBuf> {
     info!(dir = %dir.display(), "adding user message");
     fs::create_dir_all(dir)?;
-    write_default_system_config(dir)?;
+    ensure_dialog_system_prompt(dir)?;
     let slots = scan(dir)?;
     let open = validate_single_open(&slots)?;
 

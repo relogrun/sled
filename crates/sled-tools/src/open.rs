@@ -2,7 +2,8 @@ use crate::{Tool, ToolContext};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use sled_core::{ToolResult, read_message};
+use sled_core::ToolResult;
+use sled_core::storage::read_message;
 
 pub struct OpenTool;
 

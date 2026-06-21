@@ -2,10 +2,7 @@ use crate::config::{ResolvedDialogConfig, build_fold_override};
 use crate::profile::Profile;
 use anyhow::Result;
 use sled_ai::{ModelOptions, Provider, create_model_with_options};
-use sled_core::{
-    ContextLimit, Fold, StepOutcome, SystemPromptFragments, WriteOptions,
-    run_until_stop_with_options_fragments_and_limit,
-};
+use sled_core::{ContextLimit, Fold, RuntimeOptions, StepOutcome, WriteOptions, run_until_stop};
 use std::path::Path;
 
 pub(crate) struct RunOptions {
@@ -33,17 +30,19 @@ pub(crate) async fn run_dialog(dir: &Path, profile: &Profile, options: RunOption
         },
     )?;
     let fold = selected_fold(profile, options.fold_override.as_deref());
-    let system_fragments = system_prompt_fragments(profile);
-    match run_until_stop_with_options_fragments_and_limit(
+    let available_tools = available_tools_prompt(profile);
+    match run_until_stop(
         dir,
         model.as_ref(),
         &profile.tools,
         fold,
-        WriteOptions {
-            body_mirror: options.body_mirror,
+        RuntimeOptions {
+            write_options: WriteOptions {
+                body_mirror: options.body_mirror,
+            },
+            available_tools,
+            context_limit: options.context_limit,
         },
-        &system_fragments,
-        options.context_limit,
     )
     .await?
     {
@@ -55,8 +54,8 @@ pub(crate) async fn run_dialog(dir: &Path, profile: &Profile, options: RunOption
     Ok(())
 }
 
-pub(crate) fn system_prompt_fragments(profile: &Profile) -> SystemPromptFragments {
-    SystemPromptFragments::new(profile.tools.tool_descriptions_prompt())
+pub(crate) fn available_tools_prompt(profile: &Profile) -> Option<String> {
+    profile.tools.tool_descriptions_prompt()
 }
 
 pub(crate) fn run_options_from_resolved_config(config: ResolvedDialogConfig) -> Result<RunOptions> {

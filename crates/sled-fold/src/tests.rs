@@ -1,5 +1,6 @@
 use super::*;
-use sled_core::{Fold, Message, Status, create_slot, scan};
+use sled_core::storage::{create_slot, scan};
+use sled_core::{Fold, Message, Status};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};

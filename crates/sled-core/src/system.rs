@@ -13,85 +13,61 @@ pub(crate) const DEFAULT_SYSTEM_PROMPT: &str = concat!(
 );
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct SystemConfig {
+struct DialogSystemPromptFile {
     #[serde(default)]
-    pub prompt: String,
+    prompt: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SystemPromptFragments {
-    pub(crate) available_tools: Option<String>,
-}
-
-impl SystemPromptFragments {
-    pub fn new(available_tools: Option<String>) -> Self {
-        Self { available_tools }
+pub fn read_dialog_system_prompt(dir: &Path) -> Result<String> {
+    let path = dir.join("_system.json5");
+    if !path.exists() {
+        return Ok(String::new());
     }
-}
-
-pub fn read_system_config(dir: &Path) -> Result<SystemConfig> {
-    let json5_path = dir.join("_system.json5");
-    let json_path = dir.join("_system.json");
-    let path = if json5_path.exists() {
-        Some(json5_path)
-    } else if json_path.exists() {
-        Some(json_path)
-    } else {
-        None
-    };
-
-    let Some(path) = path else {
-        return Ok(SystemConfig::default());
-    };
     let text = fs::read_to_string(&path)?;
-    json5::from_str(&text).with_context(|| format!("could not parse {}", path.display()))
+    let file: DialogSystemPromptFile =
+        json5::from_str(&text).with_context(|| format!("could not parse {}", path.display()))?;
+    Ok(file.prompt)
 }
 
-pub fn write_default_system_config(dir: &Path) -> Result<()> {
-    let json5_path = dir.join("_system.json5");
-    let json_path = dir.join("_system.json");
-    if json5_path.exists() || json_path.exists() {
+pub fn ensure_dialog_system_prompt(dir: &Path) -> Result<()> {
+    let path = dir.join("_system.json5");
+    if path.exists() {
         return Ok(());
     }
-    write_system_config(dir, &SystemConfig::default())
+    write_dialog_system_prompt(dir, "")
 }
 
-pub fn write_system_config(dir: &Path, config: &SystemConfig) -> Result<()> {
+fn write_dialog_system_prompt(dir: &Path, prompt: &str) -> Result<()> {
     let path = dir.join("_system.json5");
-    durable_write(&path, system_config_json5(config)?.as_bytes())?;
+    durable_write(&path, dialog_system_prompt_json5(prompt)?.as_bytes())?;
     Ok(())
 }
 
-pub fn write_system_prompt(dir: &Path, prompt: impl Into<String>) -> Result<()> {
-    write_system_config(
-        dir,
-        &SystemConfig {
-            prompt: prompt.into(),
-        },
-    )
+pub fn set_dialog_system_prompt(dir: &Path, prompt: impl Into<String>) -> Result<()> {
+    let prompt = prompt.into();
+    write_dialog_system_prompt(dir, &prompt)
 }
 
-fn system_config_json5(config: &SystemConfig) -> Result<String> {
+fn dialog_system_prompt_json5(prompt: &str) -> Result<String> {
     Ok(format!(
         "// Dialog-specific system prompt fragment.\n\
          // sled always prepends its internal protocol prompt before this fragment.\n\
          {}\n",
-        serde_json::to_string_pretty(config)?
+        serde_json::to_string_pretty(&DialogSystemPromptFile {
+            prompt: prompt.into()
+        })?
     ))
 }
 
-pub(crate) fn resolve_system_prompt(
-    config: &SystemConfig,
-    fragments: &SystemPromptFragments,
-) -> String {
+pub(crate) fn build_system_prompt(dialog_prompt: &str, available_tools: Option<&str>) -> String {
     let mut parts = vec![system_section("Sled Protocol", DEFAULT_SYSTEM_PROMPT)];
-    if let Some(tools) = &fragments.available_tools
+    if let Some(tools) = available_tools
         && !tools.trim().is_empty()
     {
         parts.push(system_section("Available Tools", tools));
     }
-    if !config.prompt.trim().is_empty() {
-        parts.push(system_section("Dialog Instructions", &config.prompt));
+    if !dialog_prompt.trim().is_empty() {
+        parts.push(system_section("Dialog Instructions", dialog_prompt));
     }
     parts.join("\n\n")
 }

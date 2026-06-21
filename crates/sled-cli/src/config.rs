@@ -1,9 +1,8 @@
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sled_ai::{AnthropicEffort, AnthropicThinking, OpenAiReasoningEffort, Provider, default_model};
-use sled_core::{
-    ContextLimit, DEFAULT_CONTEXT_RATIO, DEFAULT_CONTEXT_WINDOW_TOKENS, Fold, durable_write,
-};
+use sled_core::storage::durable_write;
+use sled_core::{ContextLimit, DEFAULT_CONTEXT_RATIO, DEFAULT_CONTEXT_WINDOW_TOKENS, Fold};
 use sled_fold::{RecentBytesFold, RecentMessagesFold, RecentTokensFold};
 use std::fs;
 use std::path::Path;
