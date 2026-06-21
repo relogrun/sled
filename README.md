@@ -25,23 +25,10 @@ Each filled message is a JSON5 file named by slot, role, and status:
 - A pending tool with no result or suspension may be executed again after a crash. Side-effectful tools must be idempotent.
 - Once content is written, slot number and role do not change. Only status changes.
 
-## Core Ideas
-
-The normal workflow is a `say` / `run` loop. `say` writes the next user or human answer into the dialog directory. `run` advances the dialog until the assistant finishes, asks for user input, requests a tool, or hits an error.
-
-The system has four main moving parts:
-
-- Files are the source of truth. A dialog directory contains messages, open work, config, system instructions, and optional archive data.
-- Tools let the model act. A model writes one `tool.pending` request; sled executes it, records the result in the same file, and continues.
-- Folds decide what the model can see. A fold turns the current dialog files into `index` and `bodies`, then the common context budget keeps the newest whole body sections that fit.
-- Compact rewrites old dialog files into a summarized `compact` message and archives the originals. It is a storage operation that makes later folds smaller.
-
-You can inspect every layer directly: list files, open JSON5 messages, run `context` to see the exact model input, and use `archive` tooling to recover compacted details.
-
 ## Contents
 
-- [Core Ideas](#core-ideas)
 - [Quick Start](#quick-start)
+- [Core Ideas](#core-ideas)
 - [File Roles and Statuses](#file-roles-and-statuses)
 - [Commands](#commands)
 - [Config](#config)
@@ -105,6 +92,19 @@ Or do both in one command:
 ```bash
 sled say ./runs/example "Use option A." --run
 ```
+
+## Core Ideas
+
+The normal workflow is a `say` / `run` loop. `say` writes the next user or human answer into the dialog directory. `run` advances the dialog until the assistant finishes, asks for user input, requests a tool, or hits an error.
+
+The system has four main moving parts:
+
+- Files are the source of truth. A dialog directory contains messages, open work, config, system instructions, and optional archive data.
+- Tools let the model act. A model writes one `tool.pending` request; sled executes it, records the result in the same file, and continues.
+- Folds decide what the model can see. A fold turns the current dialog files into `index` and `bodies`, then the common context budget keeps the newest whole body sections that fit.
+- Compact rewrites old dialog files into a summarized `compact` message and archives the originals. It is a storage operation that makes later folds smaller.
+
+You can inspect every layer directly: list files, open JSON5 messages, run `context` to see the exact model input, and use `archive` tooling to recover compacted details.
 
 ## File Roles and Statuses
 
