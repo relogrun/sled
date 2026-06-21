@@ -95,24 +95,3 @@ pub(crate) fn chat_completions_endpoint(base_url: &str) -> String {
         format!("{trimmed}/chat/completions")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builds_chat_completions_endpoint() {
-        assert_eq!(
-            chat_completions_endpoint("https://example.com/v1"),
-            "https://example.com/v1/chat/completions"
-        );
-        assert_eq!(
-            chat_completions_endpoint("https://example.com/v1/"),
-            "https://example.com/v1/chat/completions"
-        );
-        assert_eq!(
-            chat_completions_endpoint("https://example.com/v1/chat/completions"),
-            "https://example.com/v1/chat/completions"
-        );
-    }
-}

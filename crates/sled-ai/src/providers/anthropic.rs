@@ -80,7 +80,7 @@ impl Model for AnthropicModel {
     }
 }
 
-fn anthropic_messages_payload(
+pub(crate) fn anthropic_messages_payload(
     model: &str,
     system: &str,
     user: &str,
@@ -116,7 +116,7 @@ fn anthropic_sled_reply_tool() -> Value {
     })
 }
 
-fn anthropic_response_reply(response: &Value) -> Option<Result<Reply>> {
+pub(crate) fn anthropic_response_reply(response: &Value) -> Option<Result<Reply>> {
     for content in response["content"].as_array()? {
         if content["type"]
             .as_str()
@@ -132,7 +132,7 @@ fn anthropic_response_reply(response: &Value) -> Option<Result<Reply>> {
     anthropic_response_text(response).map(|text| parse_reply(&text))
 }
 
-fn anthropic_response_text(response: &Value) -> Option<String> {
+pub(crate) fn anthropic_response_text(response: &Value) -> Option<String> {
     let mut texts = Vec::new();
     for content in response["content"].as_array()? {
         if content["type"].as_str().is_some_and(|kind| kind == "text") {
@@ -146,73 +146,5 @@ fn anthropic_response_text(response: &Value) -> Option<String> {
         None
     } else {
         Some(text)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builds_anthropic_payload_with_effort_and_adaptive_thinking() {
-        let payload = anthropic_messages_payload(
-            "claude-sonnet-4-6",
-            "system prompt",
-            "user context",
-            Some(AnthropicEffort::Medium),
-            Some(AnthropicThinking::Adaptive),
-        );
-
-        assert_eq!(payload["model"], "claude-sonnet-4-6");
-        assert_eq!(payload["output_config"]["effort"], "medium");
-        assert_eq!(payload["thinking"]["type"], "adaptive");
-        assert_eq!(payload["tool_choice"]["type"], "tool");
-        assert_eq!(payload["tool_choice"]["name"], "sled_reply");
-        assert_eq!(payload["tools"][0]["name"], "sled_reply");
-        assert_eq!(payload["tools"][0]["strict"], true);
-    }
-
-    #[test]
-    fn extracts_anthropic_text_after_thinking_blocks() {
-        let response = json!({
-            "content": [
-                {"type": "thinking", "thinking": "hidden summary"},
-                {"type": "text", "text": "{\"type\":\"final\",\"text\":\"ok\"}"}
-            ]
-        });
-
-        assert_eq!(
-            anthropic_response_text(&response).as_deref(),
-            Some("{\"type\":\"final\",\"text\":\"ok\"}")
-        );
-    }
-
-    #[test]
-    fn extracts_anthropic_sled_reply_tool_use() {
-        let response = json!({
-            "content": [
-                {
-                    "type": "tool_use",
-                    "name": "sled_reply",
-                    "input": {
-                        "type": "tool",
-                        "text": "",
-                        "summary": "probe x",
-                        "wait_user": false,
-                        "tool": "probe",
-                        "args_json": "{\"x\":14}"
-                    }
-                }
-            ]
-        });
-
-        match anthropic_response_reply(&response).unwrap().unwrap() {
-            Reply::Tool { call, summary } => {
-                assert_eq!(call.tool, "probe");
-                assert_eq!(call.args["x"], 14);
-                assert_eq!(summary, "probe x");
-            }
-            other => panic!("expected tool reply, got {other:?}"),
-        }
     }
 }

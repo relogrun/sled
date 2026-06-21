@@ -78,7 +78,7 @@ impl Model for OpenAiResponsesModel {
     }
 }
 
-fn openai_responses_payload(
+pub(crate) fn openai_responses_payload(
     model: &str,
     system: &str,
     user: &str,
@@ -115,7 +115,7 @@ fn openai_sled_reply_tool() -> Value {
     })
 }
 
-fn openai_response_reply(response: &Value) -> Option<Result<Reply>> {
+pub(crate) fn openai_response_reply(response: &Value) -> Option<Result<Reply>> {
     for item in response["output"].as_array()? {
         if item["type"]
             .as_str()
@@ -138,7 +138,7 @@ fn openai_response_reply(response: &Value) -> Option<Result<Reply>> {
     openai_response_text(response).map(|text| parse_reply(&text))
 }
 
-fn openai_response_text(response: &Value) -> Option<String> {
+pub(crate) fn openai_response_text(response: &Value) -> Option<String> {
     if let Some(text) = response["output_text"].as_str() {
         if !text.trim().is_empty() {
             return Some(text.to_string());
@@ -158,91 +158,5 @@ fn openai_response_text(response: &Value) -> Option<String> {
         None
     } else {
         Some(text)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builds_openai_responses_payload_with_reasoning() {
-        let payload = openai_responses_payload(
-            "gpt-5.4-mini",
-            "system prompt",
-            "user context",
-            Some(OpenAiReasoningEffort::Low),
-            None,
-        );
-
-        assert_eq!(payload["model"], "gpt-5.4-mini");
-        assert_eq!(payload["instructions"], "system prompt");
-        assert_eq!(payload["input"], "user context");
-        assert_eq!(payload["reasoning"]["effort"], "low");
-        assert_eq!(payload["tools"][0]["type"], "function");
-        assert_eq!(payload["tools"][0]["name"], "sled_reply");
-        assert_eq!(payload["tools"][0]["strict"], true);
-        assert_eq!(payload["tool_choice"]["type"], "function");
-        assert_eq!(payload["tool_choice"]["name"], "sled_reply");
-        assert_eq!(payload["parallel_tool_calls"], false);
-        assert!(payload["messages"].is_null());
-        assert!(payload["text"].is_null());
-        assert!(payload["temperature"].is_null());
-    }
-
-    #[test]
-    fn openai_responses_payload_omits_temperature_unless_explicit() {
-        let omitted = openai_responses_payload("gpt-5.4-mini", "system", "user", None, None);
-        let explicit = openai_responses_payload("gpt-5.4-mini", "system", "user", None, Some(1.0));
-
-        assert!(omitted["temperature"].is_null());
-        assert_eq!(explicit["temperature"], 1.0);
-    }
-
-    #[test]
-    fn extracts_openai_output_text() {
-        let response = json!({
-            "output": [
-                {
-                    "content": [
-                        {"type": "output_text", "text": "{\"type\":\"final\",\"text\":\"ok\"}"}
-                    ]
-                }
-            ]
-        });
-
-        assert_eq!(
-            openai_response_text(&response).as_deref(),
-            Some("{\"type\":\"final\",\"text\":\"ok\"}")
-        );
-    }
-
-    #[test]
-    fn extracts_openai_sled_reply_function_call() {
-        let response = json!({
-            "output": [
-                {
-                    "type": "function_call",
-                    "name": "sled_reply",
-                    "arguments": r#"{
-                        "type": "tool",
-                        "text": "",
-                        "summary": "probe x",
-                        "wait_user": false,
-                        "tool": "probe",
-                        "args_json": "{\"x\":14}"
-                    }"#
-                }
-            ]
-        });
-
-        match openai_response_reply(&response).unwrap().unwrap() {
-            Reply::Tool { call, summary } => {
-                assert_eq!(call.tool, "probe");
-                assert_eq!(call.args["x"], 14);
-                assert_eq!(summary, "probe x");
-            }
-            other => panic!("expected tool reply, got {other:?}"),
-        }
     }
 }
