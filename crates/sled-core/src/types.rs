@@ -60,6 +60,8 @@ pub struct Message {
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suspension: Option<ToolSuspension>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact: Option<Value>,
 }
 
 impl Message {
@@ -68,6 +70,7 @@ impl Message {
             || self.call.is_some()
             || self.result.is_some()
             || self.suspension.is_some()
+            || self.compact.is_some()
     }
 }
 

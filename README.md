@@ -33,6 +33,7 @@ Each filled message is a JSON5 file named by slot, role, and status:
 - [Config](#config)
 - [Dialog Config](#dialog-config)
 - [System Prompt](#system-prompt)
+- [Compaction](#compaction)
 - [Tools](#tools)
 - [Workspace](#workspace)
 - [Logging](#logging)
@@ -97,6 +98,7 @@ Open slots and filled messages use these filename shapes:
 0002.running.json5          # model turn, role not known yet
 0001.user.done.json5        # user message, closed
 0002.assistant.done.json5   # assistant message, closed
+0001.compact.done.json5     # compacted summary replacing archived old messages
 0003.tool.pending.json5     # tool call awaiting the runner
 0003.tool.done.json5        # tool call completed by the runner
 0004.tool.awaiting.json5    # suspended tool awaiting input from you
@@ -126,6 +128,14 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--context-window-tokens <n>` to override the model context window used for the safety budget.
   - `--context-ratio <ratio>` to override the max ratio of the model context window used by input. Default: `0.8`.
   - `--body-mirror` to save markdown body mirrors as enabled. Default: off.
+- `compact <dir>` — summarize selected active `done` slots through a model, archive their original files, and replace them with one `compact` message.
+  - `--from-slot <n>` to start compaction at a specific slot. Default: first active `done` slot.
+  - Use exactly one range end:
+    - `--to-slot <n>` to compact through a slot number.
+    - `--keep-recent <n>` to leave the last `n` active `done` slots raw.
+    - `--keep-recent-tokens <n>` to leave the newest active `done` body sections fitting this estimated token budget raw.
+  - `--summary-tokens <n>` to set the target summary size. Default: `2000`.
+  - Provider/model/context options are the same as `run`, except `compact` does not take `--fold`.
 - `context <dir>` — show the assembled system prompt, index, and bodies for the current dialog files.
   - `--fold <pipeline>` to override the fold pipeline used for the displayed context.
   - `--context-window-tokens <n>` to override the model context window used for the displayed safety budget.
@@ -250,6 +260,37 @@ cargo run -p sled-cli -- init ./runs/example --system-file ./system.md
 ```
 
 Built-in sled protocol prompts are always included. Tool descriptions from the active `ToolRegistry` are inserted as their own section. `_system.json5` only appends dialog-specific instructions.
+
+## Compaction
+
+`compact` is a storage operation, not a fold. It changes the active dialog so ordinary folds can keep working without special subtraction rules.
+
+For example:
+
+```bash
+cargo run -p sled-cli -- compact ./runs/example --to-slot 42
+cargo run -p sled-cli -- compact ./runs/example --from-slot 10 --to-slot 42
+cargo run -p sled-cli -- compact ./runs/example --keep-recent 8
+cargo run -p sled-cli -- compact ./runs/example --keep-recent-tokens 30000
+```
+
+The command sends the selected active `done` slots to the configured model with a compact-specific prompt. It does not send the normal sled protocol prompt or tool descriptions. The compact input is checked against the same context-window settings as `run`; if the selected range does not fit, choose a smaller range.
+
+After a successful compact, originals are moved into the archive and one compact message replaces them in the active dialog:
+
+```text
+archive/
+  slots/
+    0001.user.done.json5
+    0002.assistant.done.json5
+  compacts/
+    0001-0042.json5
+
+0001.compact.done.json5
+0043.user.done.json5
+```
+
+The active compact message contains the summary shown to future model runs. The manifest in `archive/compacts/` records the compact pass, including the archived slot range, description, provider/model, and a copy of the summary.
 
 ## Tools
 

@@ -1,4 +1,5 @@
 mod args;
+mod compact;
 mod config;
 mod fold;
 mod init;
@@ -7,6 +8,7 @@ mod profile;
 mod run;
 
 use crate::args::{Cli, Command};
+use crate::compact::compact_dialog;
 use crate::config::{
     DialogOptionOverrides, apply_dialog_option_overrides, build_fold_override, read_dialog_config,
     read_resolved_dialog_config, resolve_dialog_config, write_dialog_config,
@@ -82,6 +84,9 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             std::fs::create_dir_all(&dir)?;
             let config = read_resolved_dialog_config(&dir, options.into())?;
             run_dialog(&dir, &profile, run_options_from_resolved_config(config)?).await?;
+        }
+        Command::Compact { dir, options } => {
+            compact_dialog(&dir, options).await?;
         }
         Command::Status { dir } => {
             print!("{}", status_report(&dir)?);

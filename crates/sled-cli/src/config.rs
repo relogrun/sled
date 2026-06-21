@@ -1,4 +1,4 @@
-use crate::args::{ContextArgs, DialogArgs};
+use crate::args::{CompactArgs, ContextArgs, DialogArgs};
 use crate::fold::build_fold_pipeline;
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -105,6 +105,22 @@ impl From<ContextArgs> for DialogOptionOverrides {
     fn from(args: ContextArgs) -> Self {
         Self {
             fold: args.fold,
+            context_window_tokens: args.context.context_window_tokens,
+            context_ratio: args.context.context_ratio,
+            ..Self::default()
+        }
+    }
+}
+
+impl From<&CompactArgs> for DialogOptionOverrides {
+    fn from(args: &CompactArgs) -> Self {
+        Self {
+            provider: args.provider.provider,
+            model: args.provider.model.clone(),
+            openai_reasoning: args.provider.openai_reasoning,
+            anthropic_effort: args.provider.anthropic_effort,
+            anthropic_thinking: args.provider.anthropic_thinking,
+            openai_compatible_base_url: args.provider.openai_compatible_base_url.clone(),
             context_window_tokens: args.context.context_window_tokens,
             context_ratio: args.context.context_ratio,
             ..Self::default()

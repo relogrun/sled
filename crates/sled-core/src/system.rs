@@ -5,11 +5,11 @@ use std::fs;
 use std::path::Path;
 
 pub(crate) const DEFAULT_SYSTEM_PROMPT: &str = concat!(
-    include_str!("../../../prompts/system.md"),
+    include_str!("prompts/system.md"),
     "\n\n",
-    include_str!("../../../prompts/context_format.md"),
+    include_str!("prompts/context_format.md"),
     "\n\n",
-    include_str!("../../../prompts/reply_protocol.md")
+    include_str!("prompts/reply_protocol.md")
 );
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

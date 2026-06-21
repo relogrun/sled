@@ -90,6 +90,9 @@ fn body_section(slot: &Slot, role: &str, msg: &Message) -> String {
     if let Some(suspension) = &msg.suspension {
         section.push_str(&format!("suspension_request: {}\n", suspension.request));
     }
+    if let Some(compact) = &msg.compact {
+        section.push_str(&format!("compact: {}\n", compact));
+    }
     section.push('\n');
     section
 }

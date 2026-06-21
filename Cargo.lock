@@ -1181,11 +1181,24 @@ dependencies = [
  "serde",
  "serde_json",
  "sled-ai",
+ "sled-compact",
  "sled-core",
  "sled-fold",
  "sled-tools",
  "tokio",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "sled-compact"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sled-core",
+ "tokio",
 ]
 
 [[package]]

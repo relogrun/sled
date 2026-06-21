@@ -40,6 +40,11 @@ pub(crate) enum Command {
         #[command(flatten)]
         options: DialogArgs,
     },
+    Compact {
+        dir: PathBuf,
+        #[command(flatten)]
+        options: CompactArgs,
+    },
     Status {
         dir: PathBuf,
     },
@@ -104,4 +109,29 @@ pub(crate) struct ContextLimitArgs {
         help = "Max ratio of the model context window used by input"
     )]
     pub(crate) context_ratio: Option<f32>,
+}
+
+#[derive(Args, Clone, Default)]
+pub(crate) struct CompactArgs {
+    #[command(flatten)]
+    pub(crate) provider: ProviderArgs,
+    #[command(flatten)]
+    pub(crate) context: ContextLimitArgs,
+    #[arg(long = "from-slot", help = "First active done slot to compact")]
+    pub(crate) from_slot: Option<u32>,
+    #[arg(long = "to-slot", help = "Last active done slot to compact")]
+    pub(crate) to_slot: Option<u32>,
+    #[arg(long = "keep-recent", help = "Keep the last n active done slots raw")]
+    pub(crate) keep_recent: Option<usize>,
+    #[arg(
+        long = "keep-recent-tokens",
+        help = "Keep the newest active done body sections fitting this estimated token budget raw"
+    )]
+    pub(crate) keep_recent_tokens: Option<usize>,
+    #[arg(
+        long = "summary-tokens",
+        default_value_t = 2000,
+        help = "Target compact summary size in estimated tokens"
+    )]
+    pub(crate) summary_tokens: usize,
 }

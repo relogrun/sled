@@ -4,6 +4,7 @@ members = [
     "crates/sled-fold",
     "crates/sled-ai",
     "crates/sled-tools",
+    "crates/sled-compact",
     "crates/sled-cli",
 ]
 resolver = "2"
