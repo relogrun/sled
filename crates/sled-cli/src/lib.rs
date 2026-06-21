@@ -1,5 +1,6 @@
 mod args;
 mod config;
+mod fold;
 mod init;
 mod logging;
 mod profile;

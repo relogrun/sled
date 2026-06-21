@@ -113,35 +113,45 @@ fn context_limit_rejects_invalid_ratio() {
 }
 
 #[test]
-fn recent_tokens_override_is_saved_as_fold_selection() {
+fn fold_override_is_saved_as_pipeline_string() {
     let config = dialog_config_from_overrides(DialogOptionOverrides {
-        recent_tokens: Some(2048),
+        fold: Some("recent-tokens:2048".into()),
         ..DialogOptionOverrides::default()
     })
     .unwrap();
 
-    assert_eq!(config.recent_tokens, Some(2048));
-    assert!(config.recent_messages.is_none());
-    assert!(config.recent_bytes.is_none());
+    assert_eq!(config.fold.as_deref(), Some("recent-tokens:2048"));
     let resolved = resolve_dialog_config(config, DialogOptionOverrides::default()).unwrap();
-    assert_eq!(resolved.recent_tokens, Some(2048));
+    assert_eq!(resolved.fold.as_deref(), Some("recent-tokens:2048"));
     assert!(build_fold_override(&resolved).unwrap().is_some());
 }
 
 #[test]
-fn fold_selection_overrides_are_mutually_exclusive() {
+fn fold_pipeline_rejects_unknown_stage() {
     let err = dialog_config_from_overrides(DialogOptionOverrides {
-        recent_messages: Some(2),
-        recent_tokens: Some(2048),
+        fold: Some("all,compact:2048".into()),
         ..DialogOptionOverrides::default()
     })
+    .and_then(|config| resolve_dialog_config(config, DialogOptionOverrides::default()))
+    .and_then(|resolved| build_fold_override(&resolved).map(|_| ()))
     .unwrap_err()
     .to_string();
 
-    assert_eq!(
-        err,
-        "--all, --recent-messages, --recent-bytes, and --recent-tokens select different folds; use only one"
-    );
+    assert_eq!(err, "unknown fold stage `compact:2048`");
+}
+
+#[test]
+fn fold_pipeline_rejects_later_source_stage() {
+    let err = dialog_config_from_overrides(DialogOptionOverrides {
+        fold: Some("all,recent-tokens:2048".into()),
+        ..DialogOptionOverrides::default()
+    })
+    .and_then(|config| resolve_dialog_config(config, DialogOptionOverrides::default()))
+    .and_then(|resolved| build_fold_override(&resolved).map(|_| ()))
+    .unwrap_err()
+    .to_string();
+
+    assert_eq!(err, "fold stage `recent-tokens:2048` can only appear first");
 }
 
 #[test]

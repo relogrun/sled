@@ -54,10 +54,10 @@ pub(crate) enum Command {
 pub(crate) struct DialogArgs {
     #[command(flatten)]
     pub(crate) provider: ProviderArgs,
+    #[arg(long, help = "Fold pipeline, such as all or recent-tokens:50000")]
+    pub(crate) fold: Option<String>,
     #[command(flatten)]
-    pub(crate) fold: FoldArgs,
-    #[command(flatten)]
-    pub(crate) context: ContextArgs,
+    pub(crate) context: ContextLimitArgs,
     #[arg(
         long,
         help = "Write readable .done.md mirrors beside JSON5 files (default: off)"
@@ -85,25 +85,15 @@ pub(crate) struct ProviderArgs {
 }
 
 #[derive(Args, Clone, Default)]
-pub(crate) struct FoldArgs {
-    #[arg(long, help = "Use full message context")]
-    pub(crate) all: bool,
-    #[arg(long = "recent-messages", help = "Use only the last n message bodies")]
-    pub(crate) recent_messages: Option<usize>,
-    #[arg(
-        long = "recent-bytes",
-        help = "Use a byte budget for newest body sections"
-    )]
-    pub(crate) recent_bytes: Option<usize>,
-    #[arg(
-        long = "recent-tokens",
-        help = "Use an estimated token budget for newest body sections"
-    )]
-    pub(crate) recent_tokens: Option<usize>,
+pub(crate) struct ContextArgs {
+    #[arg(long, help = "Fold pipeline, such as all or recent-tokens:50000")]
+    pub(crate) fold: Option<String>,
+    #[command(flatten)]
+    pub(crate) context: ContextLimitArgs,
 }
 
 #[derive(Args, Clone, Default)]
-pub(crate) struct ContextArgs {
+pub(crate) struct ContextLimitArgs {
     #[arg(
         long = "context-window-tokens",
         help = "Model context window token limit"

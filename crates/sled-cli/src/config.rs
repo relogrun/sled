@@ -1,4 +1,5 @@
 use crate::args::{ContextArgs, DialogArgs};
+use crate::fold::build_fold_pipeline;
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sled_ai::{
@@ -7,7 +8,6 @@ use sled_ai::{
 };
 use sled_core::storage::durable_write;
 use sled_core::{ContextLimit, DEFAULT_CONTEXT_RATIO, DEFAULT_CONTEXT_WINDOW_TOKENS, Fold};
-use sled_fold::{RecentBytesFold, RecentMessagesFold, RecentTokensFold};
 use std::fs;
 use std::path::Path;
 
@@ -22,11 +22,7 @@ pub(crate) struct DialogConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) openai_compatible: Option<OpenAiCompatibleConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) recent_messages: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) recent_bytes: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) recent_tokens: Option<usize>,
+    pub(crate) fold: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) context_window_tokens: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,9 +65,7 @@ pub(crate) struct ResolvedDialogConfig {
     pub(crate) anthropic_effort: Option<AnthropicEffort>,
     pub(crate) anthropic_thinking: Option<AnthropicThinking>,
     pub(crate) openai_compatible_base_url: Option<String>,
-    pub(crate) recent_messages: Option<usize>,
-    pub(crate) recent_bytes: Option<usize>,
-    pub(crate) recent_tokens: Option<usize>,
+    pub(crate) fold: Option<String>,
     pub(crate) context_limit: ContextLimit,
     pub(crate) body_mirror: bool,
 }
@@ -84,10 +78,7 @@ pub(crate) struct DialogOptionOverrides {
     pub(crate) anthropic_effort: Option<AnthropicEffort>,
     pub(crate) anthropic_thinking: Option<AnthropicThinking>,
     pub(crate) openai_compatible_base_url: Option<String>,
-    pub(crate) all: bool,
-    pub(crate) recent_messages: Option<usize>,
-    pub(crate) recent_bytes: Option<usize>,
-    pub(crate) recent_tokens: Option<usize>,
+    pub(crate) fold: Option<String>,
     pub(crate) context_window_tokens: Option<usize>,
     pub(crate) context_ratio: Option<f32>,
     pub(crate) body_mirror: Option<bool>,
@@ -102,10 +93,7 @@ impl From<DialogArgs> for DialogOptionOverrides {
             anthropic_effort: args.provider.anthropic_effort,
             anthropic_thinking: args.provider.anthropic_thinking,
             openai_compatible_base_url: args.provider.openai_compatible_base_url,
-            all: args.fold.all,
-            recent_messages: args.fold.recent_messages,
-            recent_bytes: args.fold.recent_bytes,
-            recent_tokens: args.fold.recent_tokens,
+            fold: args.fold,
             context_window_tokens: args.context.context_window_tokens,
             context_ratio: args.context.context_ratio,
             body_mirror: body_mirror_override(args.body_mirror),
@@ -116,8 +104,9 @@ impl From<DialogArgs> for DialogOptionOverrides {
 impl From<ContextArgs> for DialogOptionOverrides {
     fn from(args: ContextArgs) -> Self {
         Self {
-            context_window_tokens: args.context_window_tokens,
-            context_ratio: args.context_ratio,
+            fold: args.fold,
+            context_window_tokens: args.context.context_window_tokens,
+            context_ratio: args.context.context_ratio,
             ..Self::default()
         }
     }
@@ -142,9 +131,7 @@ pub(crate) fn resolve_dialog_config(
             .openai_compatible
             .as_ref()
             .and_then(|config| config.base_url.clone()),
-        recent_messages: config.recent_messages,
-        recent_bytes: config.recent_bytes,
-        recent_tokens: config.recent_tokens,
+        fold: config.fold.clone(),
         context_limit: resolved_context_limit(&config, provider, model.as_deref())?,
         body_mirror: config.body_mirror.unwrap_or(false),
     })
@@ -203,10 +190,7 @@ pub(crate) fn apply_dialog_option_overrides(
         anthropic_effort,
         anthropic_thinking,
         openai_compatible_base_url,
-        all,
-        recent_messages,
-        recent_bytes,
-        recent_tokens,
+        fold,
         context_window_tokens,
         context_ratio,
         body_mirror,
@@ -235,38 +219,8 @@ pub(crate) fn apply_dialog_option_overrides(
             .base_url = Some(openai_compatible_base_url);
     }
 
-    let fold_overrides = usize::from(all)
-        + usize::from(recent_messages.is_some())
-        + usize::from(recent_bytes.is_some())
-        + usize::from(recent_tokens.is_some());
-    if fold_overrides > 1 {
-        anyhow::bail!(
-            "--all, --recent-messages, --recent-bytes, and --recent-tokens select different folds; use only one"
-        );
-    }
-    if all {
-        config.recent_messages = None;
-        config.recent_bytes = None;
-        config.recent_tokens = None;
-    } else if recent_messages.is_some() {
-        config.recent_bytes = None;
-        config.recent_tokens = None;
-    } else if recent_bytes.is_some() {
-        config.recent_messages = None;
-        config.recent_tokens = None;
-    } else if recent_tokens.is_some() {
-        config.recent_messages = None;
-        config.recent_bytes = None;
-    }
-
-    if let Some(recent_messages) = recent_messages {
-        config.recent_messages = Some(recent_messages);
-    }
-    if let Some(recent_bytes) = recent_bytes {
-        config.recent_bytes = Some(recent_bytes);
-    }
-    if let Some(recent_tokens) = recent_tokens {
-        config.recent_tokens = Some(recent_tokens);
+    if let Some(fold) = fold {
+        config.fold = Some(fold);
     }
     if let Some(context_window_tokens) = context_window_tokens {
         config.context_window_tokens = Some(context_window_tokens);
@@ -454,24 +408,7 @@ fn set_provider_openai_reasoning(
 }
 
 pub(crate) fn build_fold_override(config: &ResolvedDialogConfig) -> Result<Option<Box<dyn Fold>>> {
-    let fold_overrides = usize::from(config.recent_messages.is_some())
-        + usize::from(config.recent_bytes.is_some())
-        + usize::from(config.recent_tokens.is_some());
-    if fold_overrides > 1 {
-        anyhow::bail!(
-            "recent_messages, recent_bytes, and recent_tokens select different folds; use only one"
-        );
-    }
-    if let Some(k) = config.recent_messages {
-        return Ok(Some(Box::new(RecentMessagesFold::new(k))));
-    }
-    if let Some(budget) = config.recent_bytes {
-        return Ok(Some(Box::new(RecentBytesFold::new(budget))));
-    }
-    if let Some(budget) = config.recent_tokens {
-        return Ok(Some(Box::new(RecentTokensFold::new(budget))));
-    }
-    Ok(None)
+    config.fold.as_deref().map(build_fold_pipeline).transpose()
 }
 
 pub(crate) fn body_mirror_override(body_mirror: bool) -> Option<bool> {
