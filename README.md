@@ -43,51 +43,53 @@ Each filled message is a JSON5 file named by slot, role, and status:
 
 If `cargo` is not installed yet, install the Rust toolchain from the official [Rust install page](https://www.rust-lang.org/tools/install). `cargo` is installed with Rust.
 
+Examples below assume a `sled` binary is available on `PATH`. During local development, replace `sled <command>` with `cargo run -p sled-cli -- <command>`.
+
 You usually work in a `say` / `run` loop: `say` writes what you say to whoever is waiting, and `run` lets the model react until it finishes, asks for input, or needs a tool result.
 
 Create a dialog and add a user message:
 
 ```bash
-cargo run -p sled-cli -- say ./runs/example "Summarize https://example.com"
+sled say ./runs/example "Summarize https://example.com"
 ```
 
 Run the assistant locally with `operator` first. It needs no API key and lets you try the file protocol directly:
 
 ```bash
-cargo run -p sled-cli -- run ./runs/example --provider operator
+sled run ./runs/example --provider operator
 ```
 
 Or run with the default OpenAI provider:
 
 ```bash
 export OPENAI_API_KEY=...
-cargo run -p sled-cli -- run ./runs/example
+sled run ./runs/example
 ```
 
 Look at the whole run:
 
 ```bash
 ls -1 ./runs/example
-cargo run -p sled-cli -- status ./runs/example
+sled status ./runs/example
 ```
 
 Inspect the assembled system prompt, index, and bodies for the current dialog files:
 
 ```bash
-cargo run -p sled-cli -- context ./runs/example
+sled context ./runs/example
 ```
 
 When a run stops at `awaiting`, answer with `say` and continue with `run`:
 
 ```bash
-cargo run -p sled-cli -- say ./runs/example "Use option A."
-cargo run -p sled-cli -- run ./runs/example
+sled say ./runs/example "Use option A."
+sled run ./runs/example
 ```
 
 Or do both in one command:
 
 ```bash
-cargo run -p sled-cli -- say ./runs/example "Use option A." --run
+sled say ./runs/example "Use option A." --run
 ```
 
 ## File Roles and Statuses
@@ -109,7 +111,7 @@ An open model turn is roleless because the model may write either an assistant m
 
 ## Commands
 
-Use `cargo run -p sled-cli -- <command>` during development.
+Use `sled <command>` after installing or building the binary.
 
 - `init <dir>` — create the dialog directory and `_system.json5`. Optional.
   - `--system <text>` to set custom system instructions.
@@ -158,8 +160,8 @@ Provider-specific flags are validated against the active provider after applying
 Every command has help:
 
 ```bash
-cargo run -p sled-cli -- --help
-cargo run -p sled-cli -- run --help
+sled --help
+sled run --help
 ```
 
 ## Config
@@ -241,7 +243,7 @@ Token budgets are currently estimated, not counted with a model tokenizer. sled 
 Write the file from the CLI when that is easier:
 
 ```bash
-cargo run -p sled-cli -- config ./runs/example --fold recent-messages:8 --body-mirror
+sled config ./runs/example --fold recent-messages:8 --body-mirror
 ```
 
 ## System Prompt
@@ -257,8 +259,8 @@ Each dialog has `_system.json5`:
 You can also set it during init:
 
 ```bash
-cargo run -p sled-cli -- init ./runs/example --system "Be concise."
-cargo run -p sled-cli -- init ./runs/example --system-file ./system.md
+sled init ./runs/example --system "Be concise."
+sled init ./runs/example --system-file ./system.md
 ```
 
 Built-in sled protocol prompts are always included. Tool descriptions from the active `ToolRegistry` are inserted as their own section. `_system.json5` only appends dialog-specific instructions.
@@ -270,10 +272,10 @@ Built-in sled protocol prompts are always included. Tool descriptions from the a
 For example:
 
 ```bash
-cargo run -p sled-cli -- compact ./runs/example --to-slot 42
-cargo run -p sled-cli -- compact ./runs/example --from-slot 10 --to-slot 42
-cargo run -p sled-cli -- compact ./runs/example --keep-recent 8
-cargo run -p sled-cli -- compact ./runs/example --keep-recent-tokens 30000
+sled compact ./runs/example --to-slot 42
+sled compact ./runs/example --from-slot 10 --to-slot 42
+sled compact ./runs/example --keep-recent 8
+sled compact ./runs/example --keep-recent-tokens 30000
 ```
 
 The command sends the selected active `done` slots to the configured model with a compact-specific prompt. It does not send the normal sled protocol prompt or tool descriptions. The compact input is checked against the same context-window settings as `run`; if the selected range does not fit, choose a smaller range.
@@ -326,8 +328,8 @@ Built-in tools:
 Logging uses `tracing` and is controlled by `RUST_LOG`:
 
 ```bash
-RUST_LOG=info cargo run -p sled-cli -- run ./runs/example
-RUST_LOG=sled_core=debug,sled_ai=debug cargo run -p sled-cli -- run ./runs/example
+RUST_LOG=info sled run ./runs/example
+RUST_LOG=sled_core=debug,sled_ai=debug sled run ./runs/example
 ```
 
 The default level is `warn`. API keys and full model context are not logged by default.
