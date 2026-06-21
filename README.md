@@ -125,8 +125,13 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--all` to use the full message context. Default.
   - `--recent-messages <n>` to use `recent-messages`.
   - `--recent-bytes <bytes>` to use `recent-bytes`.
+  - `--recent-tokens <tokens>` to use an estimated token budget for newest body sections.
+  - `--context-window-tokens <n>` to override the model context window used for the safety budget.
+  - `--context-ratio <ratio>` to override the max ratio of the model context window used by input. Default: `0.8`.
   - `--body-mirror` to save markdown body mirrors as enabled. Default: off.
 - `context <dir>` — show the assembled system prompt, index, and bodies for the current dialog files.
+  - `--context-window-tokens <n>` to override the model context window used for the displayed safety budget.
+  - `--context-ratio <ratio>` to override the max ratio used for the displayed input.
 - `status <dir>` — print the current non-terminal file if one exists, plus the latest message.
 - `config <dir>` — create or update `_config.json5`.
   - `--provider <operator|openai|openai-compatible|anthropic>` to save a provider override. If absent, the runtime default is `openai`.
@@ -135,9 +140,12 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--anthropic-effort <low|medium|high|xhigh|max>` to save Anthropic effort.
   - `--anthropic-thinking <off|adaptive>` to save Anthropic thinking mode.
   - `--openai-compatible-base-url <url>` for `openai-compatible`.
-  - `--all` to save full message context by clearing context limits.
+  - `--all` to save full message context by clearing fold selection.
   - `--recent-messages <n>` to select `recent-messages` and set its limit.
   - `--recent-bytes <bytes>` to select `recent-bytes` and set its limit.
+  - `--recent-tokens <tokens>` to select `recent-tokens` and set its estimated token limit.
+  - `--context-window-tokens <n>` to save the model context window used for the safety budget.
+  - `--context-ratio <ratio>` to save the max ratio of the model context window used by input.
   - `--body-mirror` to save markdown body mirrors as enabled.
 
 Every command has help:
@@ -185,7 +193,9 @@ Each dialog may have `_config.json5` for local, non-secret runtime overrides. Th
     model: "openai/gpt-4o-mini",
     base_url: "https://openrouter.ai/api/v1",
   },
-  recent_messages: 8,
+  recent_tokens: 20000,
+  context_window_tokens: 128000,
+  context_ratio: 0.8,
   body_mirror: true,
 }
 ```
@@ -202,11 +212,24 @@ Supported keys:
 - `openai_compatible.base_url`: base URL for `openai-compatible`, such as `https://openrouter.ai/api/v1`.
 - `recent_messages`: include only the last `n` message bodies.
 - `recent_bytes`: include the newest body sections that fit in this byte budget.
+- `recent_tokens`: include the newest body sections that fit in this estimated token budget.
+- `context_window_tokens`: model context window used for the final input safety budget.
+- `context_ratio`: max ratio of the model context window used by `system + index + bodies`.
 - `body_mirror`: write readable `.done.md` mirrors beside JSON5 files.
 
-Runtime defaults: provider is `openai`, OpenAI model is `gpt-5.4-mini`, Anthropic model is `claude-sonnet-4-6`, body mirrors are off, and `openai-compatible` requires both `openai_compatible.model` and `openai_compatible.base_url`.
+Runtime defaults:
 
-If neither `recent_messages` nor `recent_bytes` is set, sled uses the full message context.
+- `provider`: `openai`
+- OpenAI model: `gpt-5.4-mini`
+- Anthropic model: `claude-sonnet-4-6`
+- `context_window_tokens`: `128000`
+- `context_ratio`: `0.8`
+- `body_mirror`: off
+- `openai-compatible` requires both `openai_compatible.model` and `openai_compatible.base_url`
+
+If none of `recent_messages`, `recent_bytes`, or `recent_tokens` is set, sled uses the full message context before applying the final safety budget. The final budget is common to every fold: sled keeps `system` and `index`, then keeps the newest whole body sections that fit within `context_window_tokens * context_ratio`. If `system + index` alone exceeds the budget, the run fails before sending a model request.
+
+Token budgets are currently estimated, not counted with a model tokenizer. sled approximates tokens from UTF-8 byte length, using roughly four bytes per token. This applies to `recent_tokens` and to the final safety budget.
 
 Write the file from the CLI when that is easier:
 
@@ -253,7 +276,7 @@ Built-in tools:
 ## Workspace
 
 - `sled-core`: file protocol, status transitions, fold trait, runner.
-- `sled-fold`: context fold implementations: `all`, `recent-messages`, and `recent-bytes`.
+- `sled-fold`: context fold implementations: `all`, `recent-messages`, `recent-bytes`, and `recent-tokens`.
 - `sled-ai`: assistant providers.
 - `sled-tools`: sequential tool registry and built-in tools, one tool per source file.
 - `sled-cli`: command-line interface.
@@ -297,4 +320,4 @@ Add a fold when the model should see a different representation of the dialog.
 - Receive the scanned slots and return `Context { index, bodies }`.
 - Do all context selection, summarization, compaction, or reshaping inside the fold.
 
-This is the only place that decides how the directory becomes model context. Existing examples are `AllFold`, `RecentMessagesFold`, and `RecentBytesFold`.
+This is the only place that decides how the directory becomes model context. Existing examples are `AllFold`, `RecentMessagesFold`, `RecentBytesFold`, and `RecentTokensFold`.

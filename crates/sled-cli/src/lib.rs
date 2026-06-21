@@ -7,11 +7,12 @@ use sled_ai::{
 };
 use sled_core::Fold;
 use sled_core::{
-    StepOutcome, SystemPromptFragments, WriteOptions, durable_write, preview_model_input,
-    run_until_stop_with_options_and_fragments, say_with_options, status_report,
+    ContextLimit, DEFAULT_CONTEXT_RATIO, DEFAULT_CONTEXT_WINDOW_TOKENS, StepOutcome,
+    SystemPromptFragments, WriteOptions, durable_write, preview_model_input_with_limit,
+    run_until_stop_with_options_fragments_and_limit, say_with_options, status_report,
     write_default_system_config, write_system_prompt,
 };
-use sled_fold::{AllFold, RecentBytesFold, RecentMessagesFold};
+use sled_fold::{AllFold, RecentBytesFold, RecentMessagesFold, RecentTokensFold};
 use sled_tools::ToolRegistry;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -62,7 +63,7 @@ enum Command {
             help = "Save base URL for openai-compatible providers"
         )]
         openai_compatible_base_url: Option<String>,
-        #[arg(long, help = "Clear saved context limits and use full message context")]
+        #[arg(long, help = "Clear saved fold selection and use full message context")]
         all: bool,
         #[arg(
             long = "recent-messages",
@@ -74,6 +75,21 @@ enum Command {
             help = "Save byte budget for newest body sections"
         )]
         recent_bytes: Option<usize>,
+        #[arg(
+            long = "recent-tokens",
+            help = "Save estimated token budget for newest body sections"
+        )]
+        recent_tokens: Option<usize>,
+        #[arg(
+            long = "context-window-tokens",
+            help = "Save model context window token limit"
+        )]
+        context_window_tokens: Option<usize>,
+        #[arg(
+            long = "context-ratio",
+            help = "Save max ratio of the model context window used by input"
+        )]
+        context_ratio: Option<f32>,
         #[arg(long, help = "Save markdown body mirrors as enabled")]
         body_mirror: bool,
     },
@@ -113,6 +129,21 @@ enum Command {
         )]
         recent_bytes: Option<usize>,
         #[arg(
+            long = "recent-tokens",
+            help = "Use an estimated token budget for newest body sections"
+        )]
+        recent_tokens: Option<usize>,
+        #[arg(
+            long = "context-window-tokens",
+            help = "Model context window token limit"
+        )]
+        context_window_tokens: Option<usize>,
+        #[arg(
+            long = "context-ratio",
+            help = "Max ratio of the model context window used by input"
+        )]
+        context_ratio: Option<f32>,
+        #[arg(
             long,
             help = "Write readable .done.md mirrors beside JSON5 files (default: off)"
         )]
@@ -123,6 +154,16 @@ enum Command {
     },
     Context {
         dir: PathBuf,
+        #[arg(
+            long = "context-window-tokens",
+            help = "Model context window token limit"
+        )]
+        context_window_tokens: Option<usize>,
+        #[arg(
+            long = "context-ratio",
+            help = "Max ratio of the model context window used by input"
+        )]
+        context_ratio: Option<f32>,
     },
 }
 
@@ -131,7 +172,7 @@ pub struct Profile {
     pub tools: ToolRegistry,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct DialogConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider: Option<String>,
@@ -145,6 +186,12 @@ struct DialogConfig {
     recent_messages: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     recent_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recent_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_window_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_ratio: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     body_mirror: Option<bool>,
 }
@@ -239,6 +286,9 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             all,
             recent_messages,
             recent_bytes,
+            recent_tokens,
+            context_window_tokens,
+            context_ratio,
             body_mirror,
         } => {
             std::fs::create_dir_all(&dir)?;
@@ -255,6 +305,9 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
                     all,
                     recent_messages,
                     recent_bytes,
+                    recent_tokens,
+                    context_window_tokens,
+                    context_ratio,
                     body_mirror: body_mirror_override(body_mirror),
                 },
             )?;
@@ -274,6 +327,9 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
             all,
             recent_messages,
             recent_bytes,
+            recent_tokens,
+            context_window_tokens,
+            context_ratio,
             body_mirror,
         } => {
             std::fs::create_dir_all(&dir)?;
@@ -287,6 +343,9 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
                 all,
                 recent_messages,
                 recent_bytes,
+                recent_tokens,
+                context_window_tokens,
+                context_ratio,
                 body_mirror: body_mirror_override(body_mirror),
             };
             let (config, _) = read_resolved_dialog_config(&dir, overrides)?;
@@ -295,13 +354,29 @@ pub async fn run_cli(profile: Profile) -> Result<()> {
         Command::Status { dir } => {
             print!("{}", status_report(&dir)?);
         }
-        Command::Context { dir } => {
+        Command::Context {
+            dir,
+            context_window_tokens,
+            context_ratio,
+        } => {
             std::fs::create_dir_all(&dir)?;
-            let (config, _) = read_resolved_dialog_config(&dir, DialogOptionOverrides::default())?;
+            let (config, _) = read_resolved_dialog_config(
+                &dir,
+                DialogOptionOverrides {
+                    context_window_tokens,
+                    context_ratio,
+                    ..DialogOptionOverrides::default()
+                },
+            )?;
             let fold_override = build_fold_override(&config)?;
             let fold = selected_fold(&profile, fold_override.as_deref());
             let system_fragments = system_prompt_fragments(&profile);
-            let input = preview_model_input(&dir, fold, &system_fragments)?;
+            let input = preview_model_input_with_limit(
+                &dir,
+                fold,
+                &system_fragments,
+                config.context_limit,
+            )?;
             println!("{}\n", input.system);
             println!("=== index ===\n{}", input.context.index);
             println!("=== bodies ===\n{}", input.context.bodies);
@@ -319,6 +394,7 @@ struct RunOptions {
     anthropic_thinking: Option<AnthropicThinking>,
     openai_compatible_base_url: Option<String>,
     body_mirror: bool,
+    context_limit: ContextLimit,
     fold_override: Option<Box<dyn Fold>>,
 }
 
@@ -332,6 +408,8 @@ struct ResolvedDialogConfig {
     openai_compatible_base_url: Option<String>,
     recent_messages: Option<usize>,
     recent_bytes: Option<usize>,
+    recent_tokens: Option<usize>,
+    context_limit: ContextLimit,
     body_mirror: bool,
 }
 
@@ -346,6 +424,9 @@ struct DialogOptionOverrides {
     all: bool,
     recent_messages: Option<usize>,
     recent_bytes: Option<usize>,
+    recent_tokens: Option<usize>,
+    context_window_tokens: Option<usize>,
+    context_ratio: Option<f32>,
     body_mirror: Option<bool>,
 }
 
@@ -363,7 +444,7 @@ async fn run_dialog(dir: &Path, profile: &Profile, options: RunOptions) -> Resul
     )?;
     let fold = selected_fold(profile, options.fold_override.as_deref());
     let system_fragments = system_prompt_fragments(profile);
-    match run_until_stop_with_options_and_fragments(
+    match run_until_stop_with_options_fragments_and_limit(
         dir,
         model.as_ref(),
         &profile.tools,
@@ -372,6 +453,7 @@ async fn run_dialog(dir: &Path, profile: &Profile, options: RunOptions) -> Resul
             body_mirror: options.body_mirror,
         },
         &system_fragments,
+        options.context_limit,
     )
     .await?
     {
@@ -407,8 +489,26 @@ fn resolve_dialog_config(
             .and_then(|config| config.base_url.clone()),
         recent_messages: config.recent_messages,
         recent_bytes: config.recent_bytes,
+        recent_tokens: config.recent_tokens,
+        context_limit: resolved_context_limit(&config)?,
         body_mirror: config.body_mirror.unwrap_or(false),
     })
+}
+
+fn resolved_context_limit(config: &DialogConfig) -> Result<ContextLimit> {
+    let context_limit = ContextLimit {
+        context_window_tokens: config
+            .context_window_tokens
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS),
+        context_ratio: config.context_ratio.unwrap_or(DEFAULT_CONTEXT_RATIO),
+    };
+    if context_limit.context_window_tokens == 0 {
+        anyhow::bail!("context_window_tokens must be greater than 0");
+    }
+    if !(context_limit.context_ratio > 0.0 && context_limit.context_ratio <= 1.0) {
+        anyhow::bail!("context_ratio must be greater than 0 and less than or equal to 1");
+    }
+    Ok(context_limit)
 }
 
 fn read_dialog_config(dir: &Path) -> Result<DialogConfig> {
@@ -458,6 +558,7 @@ fn run_options_from_resolved_config(config: ResolvedDialogConfig) -> Result<RunO
         anthropic_thinking: config.anthropic_thinking,
         openai_compatible_base_url: config.openai_compatible_base_url,
         body_mirror: config.body_mirror,
+        context_limit: config.context_limit,
         fold_override,
     })
 }
@@ -476,6 +577,9 @@ fn apply_dialog_option_overrides(
         all,
         recent_messages,
         recent_bytes,
+        recent_tokens,
+        context_window_tokens,
+        context_ratio,
         body_mirror,
     } = overrides;
 
@@ -504,19 +608,26 @@ fn apply_dialog_option_overrides(
 
     let fold_overrides = usize::from(all)
         + usize::from(recent_messages.is_some())
-        + usize::from(recent_bytes.is_some());
+        + usize::from(recent_bytes.is_some())
+        + usize::from(recent_tokens.is_some());
     if fold_overrides > 1 {
         anyhow::bail!(
-            "--all, --recent-messages, and --recent-bytes select different folds; use only one"
+            "--all, --recent-messages, --recent-bytes, and --recent-tokens select different folds; use only one"
         );
     }
     if all {
         config.recent_messages = None;
         config.recent_bytes = None;
+        config.recent_tokens = None;
     } else if recent_messages.is_some() {
         config.recent_bytes = None;
+        config.recent_tokens = None;
     } else if recent_bytes.is_some() {
         config.recent_messages = None;
+        config.recent_tokens = None;
+    } else if recent_tokens.is_some() {
+        config.recent_messages = None;
+        config.recent_bytes = None;
     }
 
     if let Some(recent_messages) = recent_messages {
@@ -524,6 +635,15 @@ fn apply_dialog_option_overrides(
     }
     if let Some(recent_bytes) = recent_bytes {
         config.recent_bytes = Some(recent_bytes);
+    }
+    if let Some(recent_tokens) = recent_tokens {
+        config.recent_tokens = Some(recent_tokens);
+    }
+    if let Some(context_window_tokens) = context_window_tokens {
+        config.context_window_tokens = Some(context_window_tokens);
+    }
+    if let Some(context_ratio) = context_ratio {
+        config.context_ratio = Some(context_ratio);
     }
     if let Some(body_mirror) = body_mirror {
         config.body_mirror = Some(body_mirror);
@@ -705,14 +825,24 @@ fn set_provider_openai_reasoning(
 }
 
 fn build_fold_override(config: &ResolvedDialogConfig) -> Result<Option<Box<dyn Fold>>> {
-    match (config.recent_messages, config.recent_bytes) {
-        (Some(_), Some(_)) => {
-            anyhow::bail!("recent_messages and recent_bytes select different folds; use only one")
-        }
-        (Some(k), None) => Ok(Some(Box::new(RecentMessagesFold::new(k)))),
-        (None, Some(budget)) => Ok(Some(Box::new(RecentBytesFold::new(budget)))),
-        (None, None) => Ok(None),
+    let fold_overrides = usize::from(config.recent_messages.is_some())
+        + usize::from(config.recent_bytes.is_some())
+        + usize::from(config.recent_tokens.is_some());
+    if fold_overrides > 1 {
+        anyhow::bail!(
+            "recent_messages, recent_bytes, and recent_tokens select different folds; use only one"
+        );
     }
+    if let Some(k) = config.recent_messages {
+        return Ok(Some(Box::new(RecentMessagesFold::new(k))));
+    }
+    if let Some(budget) = config.recent_bytes {
+        return Ok(Some(Box::new(RecentBytesFold::new(budget))));
+    }
+    if let Some(budget) = config.recent_tokens {
+        return Ok(Some(Box::new(RecentTokensFold::new(budget))));
+    }
+    Ok(None)
 }
 
 fn selected_fold<'a>(profile: &'a Profile, fold_override: Option<&'a dyn Fold>) -> &'a dyn Fold {
@@ -770,7 +900,83 @@ mod tests {
 
         assert!(!file_exists);
         assert!(matches!(resolved.provider, Provider::OpenAi));
+        assert_eq!(
+            resolved.context_limit,
+            ContextLimit {
+                context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+                context_ratio: DEFAULT_CONTEXT_RATIO,
+            }
+        );
         assert!(!dir.join("_config.json5").exists());
+    }
+
+    #[test]
+    fn context_limit_overrides_are_saved_and_resolved() {
+        let config = dialog_config_from_overrides(DialogOptionOverrides {
+            context_window_tokens: Some(64_000),
+            context_ratio: Some(0.75),
+            ..DialogOptionOverrides::default()
+        })
+        .unwrap();
+        assert_eq!(config.context_window_tokens, Some(64_000));
+        assert_eq!(config.context_ratio, Some(0.75));
+
+        let resolved = resolve_dialog_config(config, DialogOptionOverrides::default()).unwrap();
+        assert_eq!(
+            resolved.context_limit,
+            ContextLimit {
+                context_window_tokens: 64_000,
+                context_ratio: 0.75,
+            }
+        );
+    }
+
+    #[test]
+    fn context_limit_rejects_invalid_ratio() {
+        let err = dialog_config_from_overrides(DialogOptionOverrides {
+            context_ratio: Some(0.0),
+            ..DialogOptionOverrides::default()
+        })
+        .and_then(|config| resolve_dialog_config(config, DialogOptionOverrides::default()))
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(
+            err,
+            "context_ratio must be greater than 0 and less than or equal to 1"
+        );
+    }
+
+    #[test]
+    fn recent_tokens_override_is_saved_as_fold_selection() {
+        let config = dialog_config_from_overrides(DialogOptionOverrides {
+            recent_tokens: Some(2048),
+            ..DialogOptionOverrides::default()
+        })
+        .unwrap();
+
+        assert_eq!(config.recent_tokens, Some(2048));
+        assert!(config.recent_messages.is_none());
+        assert!(config.recent_bytes.is_none());
+        let resolved = resolve_dialog_config(config, DialogOptionOverrides::default()).unwrap();
+        assert_eq!(resolved.recent_tokens, Some(2048));
+        assert!(build_fold_override(&resolved).unwrap().is_some());
+    }
+
+    #[test]
+    fn fold_selection_overrides_are_mutually_exclusive() {
+        let err = dialog_config_from_overrides(DialogOptionOverrides {
+            recent_messages: Some(2),
+            recent_tokens: Some(2048),
+            ..DialogOptionOverrides::default()
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert_eq!(
+            err,
+            "--all, --recent-messages, --recent-bytes, and --recent-tokens select different folds; use only one"
+        );
     }
 
     #[test]
