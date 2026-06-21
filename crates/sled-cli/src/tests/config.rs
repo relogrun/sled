@@ -1,3 +1,4 @@
+use super::support::temp_dir;
 use crate::config::{
     DialogConfig, DialogOptionOverrides, OpenAiConfig, apply_dialog_option_overrides,
     build_fold_override, dialog_config_from_overrides, read_resolved_dialog_config,
@@ -6,20 +7,6 @@ use crate::config::{
 use sled_ai::{AnthropicEffort, AnthropicThinking, OpenAiReasoningEffort, Provider};
 use sled_core::{ContextLimit, DEFAULT_CONTEXT_RATIO, DEFAULT_CONTEXT_WINDOW_TOKENS};
 use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
-
-fn temp_dir() -> PathBuf {
-    let id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let seq = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("sled-cli-test-{id}-{seq}"))
-}
 
 #[test]
 fn resolving_missing_config_does_not_create_config_file() {
