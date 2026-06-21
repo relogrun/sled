@@ -1229,6 +1229,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "json5",
  "reqwest",
  "serde_json",
  "sled-core",

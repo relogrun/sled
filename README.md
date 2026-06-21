@@ -303,6 +303,7 @@ Each tool request and its result live in the same file. A completed tool is rena
 Built-in tools:
 
 - `open`: open older message bodies by slot number.
+- `archive`: inspect compacted dialog archive. It can list compact manifests, read one manifest, or read archived slot messages.
 - `read`: read local filesystem files.
 - `http_get`: fetch HTTP/HTTPS URLs with timeout and response-size limits. Redirects are not followed, and local/private IP targets are rejected.
 - `escalate`: ask the human for input when the model cannot continue without a decision or answer. This suspends the tool call as `tool.awaiting`.

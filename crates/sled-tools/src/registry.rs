@@ -1,4 +1,4 @@
-use crate::{EscalateTool, HttpGetTool, OpenTool, ReadTool};
+use crate::{ArchiveTool, EscalateTool, HttpGetTool, OpenTool, ReadTool};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -38,6 +38,7 @@ impl ToolRegistry {
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register(OpenTool);
+        registry.register(ArchiveTool);
         registry.register(ReadTool);
         registry.register(HttpGetTool::default());
         registry.register(EscalateTool);
