@@ -184,15 +184,6 @@ pub(crate) fn read_resolved_dialog_config(
     resolve_dialog_config(read_dialog_config(dir)?, overrides)
 }
 
-#[cfg(test)]
-pub(crate) fn dialog_config_from_overrides(
-    overrides: DialogOptionOverrides,
-) -> Result<DialogConfig> {
-    let mut config = DialogConfig::default();
-    apply_dialog_option_overrides(&mut config, overrides)?;
-    Ok(config)
-}
-
 pub(crate) fn apply_dialog_option_overrides(
     config: &mut DialogConfig,
     overrides: DialogOptionOverrides,

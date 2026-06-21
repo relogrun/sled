@@ -1,12 +1,17 @@
 use super::support::temp_dir;
 use crate::config::{
     DialogConfig, DialogOptionOverrides, OpenAiConfig, apply_dialog_option_overrides,
-    build_fold_override, dialog_config_from_overrides, read_resolved_dialog_config,
-    resolve_dialog_config,
+    build_fold_override, read_resolved_dialog_config, resolve_dialog_config,
 };
 use sled_ai::{AnthropicEffort, AnthropicThinking, OpenAiReasoningEffort, Provider};
 use sled_core::{ContextLimit, DEFAULT_CONTEXT_RATIO, DEFAULT_CONTEXT_WINDOW_TOKENS};
 use std::fs;
+
+fn dialog_config_from_overrides(overrides: DialogOptionOverrides) -> anyhow::Result<DialogConfig> {
+    let mut config = DialogConfig::default();
+    apply_dialog_option_overrides(&mut config, overrides)?;
+    Ok(config)
+}
 
 #[test]
 fn resolving_missing_config_does_not_create_config_file() {
