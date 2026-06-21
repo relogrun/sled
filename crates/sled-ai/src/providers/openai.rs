@@ -1,7 +1,6 @@
-use crate::{
-    OpenAiReasoningEffort, Provider, RequestDiagnostics, parse_reply, parse_reply_value,
-    send_model_request_with_retry, sled_reply_json_schema,
-};
+use crate::http::{RequestDiagnostics, send_model_request_with_retry};
+use crate::reply::{parse_reply, parse_reply_value, sled_reply_json_schema};
+use crate::{OpenAiReasoningEffort, Provider};
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
 use reqwest::Client;

@@ -1,4 +1,6 @@
-use crate::{Provider, RequestDiagnostics, parse_reply, send_model_request_with_retry};
+use crate::Provider;
+use crate::http::{RequestDiagnostics, send_model_request_with_retry};
+use crate::reply::parse_reply;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use reqwest::Client;
