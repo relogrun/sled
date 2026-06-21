@@ -4,7 +4,7 @@ use crate::config::{
     build_fold_override, read_resolved_dialog_config, resolve_dialog_config,
 };
 use sled_ai::{AnthropicEffort, AnthropicThinking, OpenAiReasoningEffort, Provider};
-use sled_core::{ContextLimit, DEFAULT_CONTEXT_RATIO, DEFAULT_CONTEXT_WINDOW_TOKENS};
+use sled_core::{ContextLimit, DEFAULT_CONTEXT_RATIO};
 use std::fs;
 
 fn dialog_config_from_overrides(overrides: DialogOptionOverrides) -> anyhow::Result<DialogConfig> {
@@ -24,7 +24,7 @@ fn resolving_missing_config_does_not_create_config_file() {
     assert_eq!(
         resolved.context_limit,
         ContextLimit {
-            context_window_tokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+            context_window_tokens: 400_000,
             context_ratio: DEFAULT_CONTEXT_RATIO,
         }
     );
@@ -50,6 +50,50 @@ fn context_limit_overrides_are_saved_and_resolved() {
             context_ratio: 0.75,
         }
     );
+}
+
+#[test]
+fn context_limit_uses_known_model_default_when_not_overridden() {
+    let resolved = resolve_dialog_config(
+        DialogConfig {
+            provider: Some("openai".into()),
+            openai: Some(OpenAiConfig {
+                model: Some("gpt-5.4-mini".into()),
+                reasoning: None,
+            }),
+            ..DialogConfig::default()
+        },
+        DialogOptionOverrides::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved.context_limit,
+        ContextLimit {
+            context_window_tokens: 400_000,
+            context_ratio: DEFAULT_CONTEXT_RATIO,
+        }
+    );
+}
+
+#[test]
+fn explicit_context_limit_overrides_known_model_default() {
+    let resolved = resolve_dialog_config(
+        DialogConfig {
+            provider: Some("anthropic".into()),
+            anthropic: Some(crate::config::AnthropicConfig {
+                model: Some("claude-sonnet-4-6".into()),
+                effort: None,
+                thinking: None,
+            }),
+            context_window_tokens: Some(64_000),
+            ..DialogConfig::default()
+        },
+        DialogOptionOverrides::default(),
+    )
+    .unwrap();
+
+    assert_eq!(resolved.context_limit.context_window_tokens, 64_000);
 }
 
 #[test]

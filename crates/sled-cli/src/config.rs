@@ -1,7 +1,10 @@
 use crate::args::{ContextArgs, DialogArgs};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
-use sled_ai::{AnthropicEffort, AnthropicThinking, OpenAiReasoningEffort, Provider, default_model};
+use sled_ai::{
+    AnthropicEffort, AnthropicThinking, OpenAiReasoningEffort, Provider,
+    default_context_window_tokens, default_model,
+};
 use sled_core::storage::durable_write;
 use sled_core::{ContextLimit, DEFAULT_CONTEXT_RATIO, DEFAULT_CONTEXT_WINDOW_TOKENS, Fold};
 use sled_fold::{RecentBytesFold, RecentMessagesFold, RecentTokensFold};
@@ -126,11 +129,12 @@ pub(crate) fn resolve_dialog_config(
 ) -> Result<ResolvedDialogConfig> {
     apply_dialog_option_overrides(&mut config, overrides)?;
     let provider = configured_provider(&config)?;
+    let model =
+        provider_model(&config, provider).or_else(|| default_model(provider).map(str::to_string));
 
     Ok(ResolvedDialogConfig {
         provider,
-        model: provider_model(&config, provider)
-            .or_else(|| default_model(provider).map(str::to_string)),
+        model: model.clone(),
         openai_reasoning_effort: provider_openai_reasoning_effort(&config, provider)?,
         anthropic_effort: provider_anthropic_effort(&config, provider)?,
         anthropic_thinking: provider_anthropic_thinking(&config, provider)?,
@@ -141,16 +145,20 @@ pub(crate) fn resolve_dialog_config(
         recent_messages: config.recent_messages,
         recent_bytes: config.recent_bytes,
         recent_tokens: config.recent_tokens,
-        context_limit: resolved_context_limit(&config)?,
+        context_limit: resolved_context_limit(&config, provider, model.as_deref())?,
         body_mirror: config.body_mirror.unwrap_or(false),
     })
 }
 
-fn resolved_context_limit(config: &DialogConfig) -> Result<ContextLimit> {
+fn resolved_context_limit(
+    config: &DialogConfig,
+    provider: Provider,
+    model: Option<&str>,
+) -> Result<ContextLimit> {
     let context_limit = ContextLimit {
-        context_window_tokens: config
-            .context_window_tokens
-            .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS),
+        context_window_tokens: config.context_window_tokens.unwrap_or_else(|| {
+            default_context_window_tokens(provider, model).unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS)
+        }),
         context_ratio: config.context_ratio.unwrap_or(DEFAULT_CONTEXT_RATIO),
     };
     if context_limit.context_window_tokens == 0 {

@@ -222,7 +222,7 @@ Runtime defaults:
 - `provider`: `openai`
 - OpenAI model: `gpt-5.4-mini`
 - Anthropic model: `claude-sonnet-4-6`
-- `context_window_tokens`: `128000`
+- `context_window_tokens`: known model context window when available, otherwise `128000`
 - `context_ratio`: `0.8`
 - `body_mirror`: off
 - `openai-compatible` requires both `openai_compatible.model` and `openai_compatible.base_url`

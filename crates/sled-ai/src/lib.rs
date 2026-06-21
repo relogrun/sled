@@ -11,7 +11,7 @@ use tracing::info;
 
 pub use operator::OperatorModel;
 pub use options::{AnthropicEffort, AnthropicThinking, ModelOptions, OpenAiReasoningEffort};
-pub use provider::{Provider, default_model};
+pub use provider::{Provider, default_context_window_tokens, default_model};
 
 pub fn create_model_with_options(
     provider: Provider,
