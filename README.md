@@ -17,19 +17,12 @@ Each filled message is a JSON5 file named by slot, role, and status:
 0004.tool.awaiting.json5   # suspended tool awaiting input from you
 ```
 
-### Guarantees
-
-- At most one non-terminal file may exist: `running`, `pending`, or `awaiting`. If the runner sees more than one, it exits with an error and touches nothing.
-- Content is durably written before status changes. A status change is a single atomic `rename`.
-- A crash between write and rename is recoverable. The next `run` completes the visible old-status file.
-- A pending tool with no result or suspension may be executed again after a crash. Side-effectful tools must be idempotent.
-- Once content is written, slot number and role do not change. Only status changes.
-
 ## Contents
 
 - [Quick Start](#quick-start)
 - [Core Ideas](#core-ideas)
 - [File Roles and Statuses](#file-roles-and-statuses)
+- [Storage Guarantees](#storage-guarantees)
 - [Commands](#commands)
 - [Config](#config)
 - [Dialog Config](#dialog-config)
@@ -122,6 +115,14 @@ Open slots and filled messages use these filename shapes:
 ```
 
 An open model turn is roleless because the model may write either an assistant message or a tool call. Once content is written, the role never changes.
+
+## Storage Guarantees
+
+- At most one non-terminal file may exist: `running`, `pending`, or `awaiting`. If the runner sees more than one, it exits with an error and touches nothing.
+- Content is durably written before status changes. A status change is a single atomic `rename`.
+- A crash between write and rename is recoverable. The next `run` completes the visible old-status file.
+- A pending tool with no result or suspension may be executed again after a crash. Side-effectful tools must be idempotent.
+- Once content is written, slot number and role do not change. Only status changes.
 
 ## Commands
 
