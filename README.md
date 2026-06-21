@@ -134,7 +134,7 @@ Use `cargo run -p sled-cli -- <command>` during development.
     - `--to-slot <n>` to compact through a slot number.
     - `--keep-recent <n>` to leave the last `n` active `done` slots raw.
     - `--keep-recent-tokens <n>` to leave the newest active `done` body sections fitting this estimated token budget raw.
-  - `--summary-tokens <n>` to set the target summary size. Default: `2000`.
+  - `--summary-tokens <n>` to set the target summary size. Must be greater than zero. Default: `2000`.
   - Provider/model/context options are the same as `run`, except `compact` does not take `--fold`.
 - `context <dir>` — show the assembled system prompt, index, and bodies for the current dialog files.
   - `--fold <pipeline>` to override the fold pipeline used for the displayed context.
@@ -152,6 +152,8 @@ Use `cargo run -p sled-cli -- <command>` during development.
   - `--context-window-tokens <n>` to save the model context window used for the safety budget.
   - `--context-ratio <ratio>` to save the max ratio of the model context window used by input.
   - `--body-mirror` to save markdown body mirrors as enabled.
+
+Provider-specific flags are validated against the active provider after applying any `--provider` override. For example, `--openai-reasoning` is only valid with `openai`, Anthropic effort/thinking flags are only valid with `anthropic`, and `--model` is not used with `operator`.
 
 Every command has help:
 
@@ -180,7 +182,7 @@ Model HTTP requests are retried conservatively for transient transport failures 
 
 ## Dialog Config
 
-Each dialog may have `_config.json5` for local, non-secret runtime overrides. The file may be partial, and missing keys use built-in defaults. Command-line arguments override it for the current command and are not written back. `config <dir>` creates or updates the file explicitly. If the file is absent, `say`, `run`, and `context` use defaults without creating it.
+Each dialog may have `_config.json5` for local, non-secret runtime overrides. The file may be partial, and missing keys use built-in defaults. Command-line arguments override it for the current command and are not written back. `config <dir>` creates or updates the file explicitly. If the file is absent, `say`, `run`, `compact`, and `context` use defaults without creating it.
 
 ```json5
 {
@@ -216,8 +218,8 @@ Supported keys:
 - `openai_compatible.model`: model name for an OpenAI-compatible provider.
 - `openai_compatible.base_url`: base URL for `openai-compatible`, such as `https://openrouter.ai/api/v1`.
 - `fold`: fold pipeline, one of `all`, `recent-messages:N`, or `recent-tokens:N`.
-- `context_window_tokens`: model context window used for the final input safety budget.
-- `context_ratio`: max ratio of the model context window used by `system + index + bodies`.
+- `context_window_tokens`: model context window used for the final input safety budget. Must be greater than zero.
+- `context_ratio`: max ratio of the model context window used by `system + index + bodies`. Must be greater than zero and less than or equal to one.
 - `body_mirror`: write readable `.done.md` mirrors beside JSON5 files.
 
 Runtime defaults:
@@ -313,6 +315,7 @@ Built-in tools:
 
 - `sled-core`: file protocol, status transitions, fold trait, runner.
 - `sled-fold`: context fold implementations: `all`, `recent-messages`, and `recent-tokens`.
+- `sled-compact`: LLM compaction and archive layout.
 - `sled-ai`: assistant providers.
 - `sled-tools`: sequential tool registry and built-in tools, one tool per source file.
 - `sled-cli`: command-line interface.
@@ -354,6 +357,8 @@ Add a fold when the model should see a different representation of the dialog.
 - Implement `sled_core::Fold`.
 - Put reusable fold implementations in `sled-fold`.
 - Receive the scanned slots and return `Context { index, bodies }`.
-- Do all context selection, summarization, compaction, or reshaping inside the fold.
+- Do context selection or reshaping inside the fold.
 
-This is the only place that decides how the directory becomes model context. Existing examples are `AllFold`, `RecentMessagesFold`, and `RecentTokensFold`.
+Fold output is then passed through the common context safety budget before a model request. Existing examples are `AllFold`, `RecentMessagesFold`, and `RecentTokensFold`.
+
+Use `compact` for storage-level summarization of old dialog files. It rewrites the active dialog before folds read it; it is not a fold implementation.
