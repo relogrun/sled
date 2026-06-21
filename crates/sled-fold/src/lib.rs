@@ -1,8 +1,8 @@
 mod all;
-mod assemble;
 mod recent_bytes;
 mod recent_messages;
 mod recent_tokens;
+mod rows;
 
 pub use all::AllFold;
 pub use recent_bytes::RecentBytesFold;
