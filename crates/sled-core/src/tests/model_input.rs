@@ -1,4 +1,6 @@
-use crate::model_input::{body_sections, estimate_tokens, fit_model_input};
+use crate::model_input::{
+    body_sections, estimate_tokens, fit_model_input, select_newest_sections_to_fit,
+};
 use crate::{Context, ContextLimit, ModelInput};
 
 #[test]
@@ -85,4 +87,27 @@ fn body_sections_ignore_markdown_rules_inside_body_text() {
     assert_eq!(sections.len(), 2);
     assert!(sections[0].contains("--- not a sled section"));
     assert!(sections[1].contains("second"));
+}
+
+#[test]
+fn newest_section_selector_accounts_for_base_text() {
+    let base = "base text";
+    let first = "first section";
+    let second = "second section";
+    let budget = estimate_tokens(base.len() + second.len());
+
+    let selected = select_newest_sections_to_fit(base.len(), [first.len(), second.len()], budget);
+
+    assert_eq!(selected, vec![false, true]);
+}
+
+#[test]
+fn newest_section_selector_keeps_whole_sections_only() {
+    let first = "first";
+    let second = "second section";
+    let budget = 1;
+
+    let selected = select_newest_sections_to_fit(0, [first.len(), second.len()], budget);
+
+    assert_eq!(selected, vec![false, false]);
 }

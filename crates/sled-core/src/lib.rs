@@ -9,7 +9,8 @@ pub mod storage;
 
 pub use model_input::{
     ContextLimit, DEFAULT_CONTEXT_RATIO, DEFAULT_CONTEXT_WINDOW_TOKENS, ModelInputOptions,
-    assemble_model_input_from_slots, preview_model_input,
+    assemble_model_input_from_slots, context_budget_tokens, estimate_tokens, preview_model_input,
+    select_newest_sections_to_fit,
 };
 pub use runner::{RuntimeOptions, StepOutcome, run_until_stop, step};
 pub use say::{say, say_with_options};

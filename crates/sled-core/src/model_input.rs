@@ -59,8 +59,7 @@ pub(crate) fn fit_model_input(
     input: ModelInput,
     context_limit: ContextLimit,
 ) -> Result<ModelInput> {
-    ensure_context_limit(context_limit)?;
-    let budget = context_budget_tokens(context_limit);
+    let budget = context_budget_tokens(context_limit)?;
     let full_text = model_input_text_len(&input.system, &input.context);
     if estimate_tokens(full_text) <= budget {
         return Ok(input);
@@ -76,16 +75,17 @@ pub(crate) fn fit_model_input(
     }
 
     let sections = body_sections(&input.context.bodies);
-    let mut selected = vec![false; sections.len()];
-    let mut bodies_len = 0usize;
-    for (idx, section) in sections.iter().enumerate().rev() {
-        let next_len = bodies_len + section.len();
-        if estimate_tokens(base_text + next_len) > budget {
-            break;
-        }
-        bodies_len = next_len;
-        selected[idx] = true;
-    }
+    let selected = select_newest_sections_to_fit(
+        base_text,
+        sections.iter().map(|section| section.len()),
+        budget,
+    );
+    let bodies_len = sections
+        .iter()
+        .zip(selected.iter())
+        .filter(|(_, selected)| **selected)
+        .map(|(section, _)| section.len())
+        .sum::<usize>();
     if !sections.is_empty() && !selected[sections.len() - 1] {
         bail!(
             "newest body section exceeds context budget: estimated {} tokens, budget {} tokens",
@@ -118,7 +118,7 @@ pub(crate) fn fit_model_input(
     })
 }
 
-fn ensure_context_limit(context_limit: ContextLimit) -> Result<()> {
+pub fn ensure_context_limit(context_limit: ContextLimit) -> Result<()> {
     if context_limit.context_window_tokens == 0 {
         bail!("context_window_tokens must be greater than 0");
     }
@@ -128,17 +128,39 @@ fn ensure_context_limit(context_limit: ContextLimit) -> Result<()> {
     Ok(())
 }
 
-fn context_budget_tokens(context_limit: ContextLimit) -> usize {
-    ((context_limit.context_window_tokens as f64) * (context_limit.context_ratio as f64)).floor()
-        as usize
+pub fn context_budget_tokens(context_limit: ContextLimit) -> Result<usize> {
+    ensure_context_limit(context_limit)?;
+    Ok(
+        ((context_limit.context_window_tokens as f64) * (context_limit.context_ratio as f64))
+            .floor() as usize,
+    )
 }
 
 fn model_input_text_len(system: &str, context: &Context) -> usize {
     system.len() + context.index.len() + context.bodies.len()
 }
 
-pub(crate) fn estimate_tokens(chars: usize) -> usize {
-    chars.div_ceil(4)
+pub fn estimate_tokens(bytes: usize) -> usize {
+    bytes.div_ceil(4)
+}
+
+pub fn select_newest_sections_to_fit(
+    base_len: usize,
+    section_lengths: impl IntoIterator<Item = usize>,
+    budget_tokens: usize,
+) -> Vec<bool> {
+    let section_lengths = section_lengths.into_iter().collect::<Vec<_>>();
+    let mut selected = vec![false; section_lengths.len()];
+    let mut used_len = 0usize;
+    for (idx, section_len) in section_lengths.iter().enumerate().rev() {
+        let next_len = used_len + section_len;
+        if estimate_tokens(base_len + next_len) > budget_tokens {
+            break;
+        }
+        used_len = next_len;
+        selected[idx] = true;
+    }
+    selected
 }
 
 pub(crate) fn body_sections(bodies: &str) -> Vec<&str> {

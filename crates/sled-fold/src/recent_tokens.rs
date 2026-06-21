@@ -1,6 +1,6 @@
 use crate::rows::{context_from_selected, context_rows};
 use anyhow::Result;
-use sled_core::{Context, Fold, Slot};
+use sled_core::{Context, Fold, Slot, select_newest_sections_to_fit};
 use tracing::debug;
 
 #[derive(Clone, Debug)]
@@ -22,26 +22,23 @@ impl Fold for RecentTokensFold {
             "assembling token-budgeted model context"
         );
         let rows = context_rows(slots)?;
-        let mut selected = vec![false; rows.len()];
-
-        let mut used = 0usize;
-        for (idx, row) in rows.iter().enumerate().rev() {
-            if row.empty_open_slot {
-                selected[idx] = true;
-                continue;
-            }
-            let section_tokens = estimate_tokens(row.body_section.len());
-            if used + section_tokens > self.budget {
-                break;
-            }
-            used += section_tokens;
-            selected[idx] = true;
-        }
-
+        let budgeted_sections = rows
+            .iter()
+            .filter(|row| !row.empty_open_slot)
+            .map(|row| row.body_section.len());
+        let budgeted_selection = select_newest_sections_to_fit(0, budgeted_sections, self.budget);
+        let mut budgeted_selection = budgeted_selection.into_iter();
+        let selected = rows
+            .iter()
+            .map(|row| {
+                if row.empty_open_slot {
+                    true
+                } else {
+                    budgeted_selection.next().unwrap_or(false)
+                }
+            })
+            .collect::<Vec<_>>();
+        debug_assert!(budgeted_selection.next().is_none());
         Ok(context_from_selected(&rows, &selected))
     }
-}
-
-fn estimate_tokens(bytes: usize) -> usize {
-    bytes.div_ceil(4)
 }
