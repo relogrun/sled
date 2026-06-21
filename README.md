@@ -95,7 +95,7 @@ The system has four main moving parts:
 - Files are the source of truth. A dialog directory contains messages, open work, config, system instructions, and optional archive data.
 - Tools let the model act. A model writes one `tool.pending` request; sled executes it, records the result in the same file, and continues.
 - Folds decide what the model can see. A fold turns the current dialog files into `index` and `bodies`, then the common context budget keeps the newest whole body sections that fit.
-- Compact rewrites old dialog files into a summarized `compact` message and archives the originals. It is a storage operation that makes later folds smaller.
+- Compact rewrites old dialog files into a summarized `compact` message and archives the originals. In the broad sense compact is also a kind of fold, but for now it is separate from `--fold` because it changes the dialog directory.
 
 ## File Roles and Statuses
 
