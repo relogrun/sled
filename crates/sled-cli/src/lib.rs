@@ -24,6 +24,7 @@ use sled_core::{
     ModelInputOptions, WriteOptions, ensure_dialog_system_prompt, preview_model_input,
     say_with_options, set_dialog_system_prompt, status_report,
 };
+use std::ffi::OsString;
 
 pub use profile::Profile;
 
@@ -32,9 +33,17 @@ pub async fn run_default_cli() -> Result<()> {
 }
 
 pub async fn run_cli(profile: Profile) -> Result<()> {
+    run_cli_from(std::env::args_os(), profile).await
+}
+
+pub async fn run_cli_from<I, T>(args: I, profile: Profile) -> Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
     dotenvy::dotenv().ok();
     init_logging();
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(args);
 
     match cli.command {
         Command::Init {
